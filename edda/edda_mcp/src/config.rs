@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 #[serde(default)]
 pub struct Config {
     pub allow_deployment: bool,
+    pub with_workspace_tools: bool,
     pub required_providers: Vec<ProviderType>,
 }
 
@@ -32,6 +33,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             allow_deployment: true,
+            with_workspace_tools: false,
             required_providers: vec![
                 ProviderType::Databricks,
                 ProviderType::Deployment,

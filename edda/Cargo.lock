@@ -1065,6 +1065,8 @@ dependencies = [
  "eyre",
  "filetime",
  "flate2",
+ "glob",
+ "regex",
  "rmcp",
  "rmcp-in-process-transport",
  "schemars 1.0.4",
@@ -1078,6 +1080,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "walkdir",
 ]
 
 [[package]]

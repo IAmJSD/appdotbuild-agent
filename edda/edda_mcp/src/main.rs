@@ -2,7 +2,9 @@ use clap::{Parser, Subcommand};
 use edda_mcp::paths;
 use edda_mcp::providers::{
     CombinedProvider, DatabricksProvider, DeploymentProvider, GoogleSheetsProvider, IOProvider,
+    WorkspaceTools,
 };
+use edda_mcp::session::SessionContext;
 use edda_mcp::trajectory::TrajectoryTrackingProvider;
 use edda_mcp::yell;
 use edda_sandbox::dagger::{ConnectOpts, Logger};
@@ -20,6 +22,10 @@ struct Cli {
     /// Disallow deployment operations (overrides config file)
     #[arg(long)]
     disallow_deployment: bool,
+
+    /// Enable workspace tools (overrides config file)
+    #[arg(long)]
+    with_workspace_tools: bool,
 
     #[command(subcommand)]
     command: Option<Commands>,
@@ -85,6 +91,9 @@ async fn main() -> Result<()> {
             let mut config = edda_mcp::config::Config::load_from_dir()?;
             if cli.disallow_deployment {
                 config.allow_deployment = false;
+            }
+            if cli.with_workspace_tools {
+                config.with_workspace_tools = true;
             }
             run_server(config).await
         }
@@ -161,6 +170,15 @@ async fn run_server(config: edda_mcp::config::Config) -> Result<()> {
     let google_sheets = GoogleSheetsProvider::new().await.ok();
     let io = IOProvider::new().ok();
 
+    // create session context (session_id populated earlier)
+    let session_ctx = SessionContext::new(session_id.clone());
+
+    let workspace = if config.with_workspace_tools {
+        WorkspaceTools::new(session_ctx.clone()).ok()
+    } else {
+        None
+    };
+
     // print startup banner to stderr (won't interfere with stdio MCP transport)
     let mut providers_list = Vec::new();
     if databricks.is_some() {
@@ -174,6 +192,9 @@ async fn run_server(config: edda_mcp::config::Config) -> Result<()> {
     }
     if config.allow_deployment && io.is_some() {
         providers_list.push("I/O");
+    }
+    if workspace.is_some() {
+        providers_list.push("Workspace");
     }
 
     let log_info = match &log_path {
@@ -193,13 +214,13 @@ async fn run_server(config: edda_mcp::config::Config) -> Result<()> {
 
     // create combined provider with all available integrations
     let provider =
-        CombinedProvider::new(databricks, deployment, google_sheets, io).map_err(|_| {
+        CombinedProvider::new(session_ctx, databricks, deployment, google_sheets, io, workspace).map_err(|_| {
             eyre::eyre!(
                 "No integrations available. Configure at least one:\n\
              - Databricks: Set DATABRICKS_HOST and DATABRICKS_TOKEN\n\
              - Deployment: Set DATABRICKS_HOST and DATABRICKS_TOKEN)\n\
              - Google Sheets: Place credentials at ~/.config/gspread/credentials.json\n\
-             - I/O: Always available"
+             - I/O: Always available (includes Workspace tools)"
             )
         })?;
 
