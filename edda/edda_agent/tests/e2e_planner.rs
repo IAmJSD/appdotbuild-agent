@@ -251,19 +251,6 @@ async fn test_e2e_planner_anthropic() {
     .await
 }
 
-/// Test planner-worker workflow with OpenRouter (DeepSeek)
-#[tokio::test]
-#[cfg_attr(not(feature = "dagger"), ignore)]
-#[ignore] // API performance variability causes timeouts
-async fn test_e2e_planner_openrouter() {
-    test_e2e_planner_impl(
-        "test_e2e_planner_openrouter",
-        LLMProvider::OpenRouter,
-        "openrouter_planner",
-    )
-    .await
-}
-
 async fn test_e2e_planner_impl(test_name: &str, llm_provider: LLMProvider, planner_id: &str) {
     dotenvy::dotenv().ok();
     if !llm_provider.is_api_key_env_var_set() {

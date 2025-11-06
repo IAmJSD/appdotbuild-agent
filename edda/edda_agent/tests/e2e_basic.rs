@@ -110,19 +110,6 @@ async fn test_e2e_basic_anthropic() {
     .await
 }
 
-/// Test with OpenRouter (DeepSeek)
-#[tokio::test]
-#[cfg_attr(not(feature = "dagger"), ignore)]
-#[ignore] // API performance variability causes timeouts
-async fn test_e2e_basic_openrouter() {
-    test_e2e_basic_impl(
-        "test_e2e_basic_openrouter",
-        LLMProvider::OpenRouter,
-        "openrouter_basic",
-    )
-    .await
-}
-
 async fn test_e2e_basic_impl(test_name: &str, llm_provider: LLMProvider, aggregate_id: &str) {
     dotenvy::dotenv().ok();
     if !llm_provider.is_api_key_env_var_set() {
