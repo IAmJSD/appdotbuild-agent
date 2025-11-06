@@ -51,7 +51,7 @@ def calculate_appeval_100(
     Calculate the appeval_100 composite score.
 
     Formula:
-        R = geometric_mean([build, runtime, type_safety, tests, db_connectivity, data, ui])
+        R = geometric_mean([build, runtime, type_safety, tests, db_connectivity])
         D = geometric_mean([local_runability_score/5, deployability_score/5])
         G = (0.25 + 0.75*build) * (0.25 + 0.75*runtime) * (0.50 + 0.50*db_connectivity)
         appeval_100 = 100 * (0.7*R + 0.3*D) * G
@@ -62,34 +62,25 @@ def calculate_appeval_100(
         type_safety: Binary metric
         tests_pass: Binary metric
         databricks_connectivity: Binary metric
-        data_metric: Either a 0-5 score (evaluate_app) or boolean (evaluate_all)
-        ui_metric: Either a 0-5 score (evaluate_app) or boolean (evaluate_all)
+        data_metric: Kept for backward compatibility, NOT included in score
+        ui_metric: Kept for backward compatibility, NOT included in score
         local_runability_score: DevX score 0-5
         deployability_score: DevX score 0-5
 
     Returns:
         Score from 0-100
+
+    Note:
+        data_metric and ui_metric are excluded from the score calculation but kept
+        as parameters for backward compatibility and data collection purposes.
     """
-    # Normalize data and UI metrics
-    if isinstance(data_metric, bool):
-        data_normalized = _to01_bool(data_metric)
-    else:
-        data_normalized = _to01_5(data_metric)
-
-    if isinstance(ui_metric, bool):
-        ui_normalized = _to01_bool(ui_metric)
-    else:
-        ui_normalized = _to01_5(ui_metric)
-
-    # Calculate R (reliability/functionality)
+    # Calculate R (reliability/functionality) - EXCLUDES data_metric and ui_metric
     R = _gm([
         _to01_bool(build_success),
         _to01_bool(runtime_success),
         _to01_bool(type_safety),
         _to01_bool(tests_pass),
         _to01_bool(databricks_connectivity),
-        data_normalized,
-        ui_normalized,
     ])
 
     # Calculate D (developer experience)

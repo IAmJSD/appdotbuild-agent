@@ -627,14 +627,14 @@ def evaluate_app(app_dir: Path, prompt: str | None = None) -> EvalResult:
             if not db_success:
                 issues.append("Databricks connectivity failed")
 
-            # Metric 6: Data validity (LLM - binary check)
+            # Metric 6: Data validity (LLM - binary check) - NOT INCLUDED IN SCORE
             if db_success:
                 data_returned, data_details = check_data_validity_llm(app_dir, prompt)
                 metrics.data_returned = data_returned
                 if not data_returned:
                     issues.append(f"Data validity concerns: {data_details}")
 
-            # Metric 7: UI functional (VLM - binary check)
+            # Metric 7: UI functional (VLM - binary check) - NOT INCLUDED IN SCORE
             ui_renders, ui_details = check_ui_functional_vlm(app_dir, prompt)
             metrics.ui_renders = ui_renders
             if not ui_renders:
