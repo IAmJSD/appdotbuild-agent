@@ -67,6 +67,8 @@ jobs:
         # Run with single thread due to Dagger connection race conditions
         # Exclude postponed crates (edda_agent, edda_cli) - they contain expensive E2E tests
         # that require LLM API calls, cost money, and test functionality that's currently postponed
+        # Note: Tests with #[cfg_attr(not(feature = "dagger"), ignore)] will be skipped here
+        # and run in the rust-tests-dagger job instead
         run: cargo nextest run --tests --workspace --exclude edda_agent --exclude edda_cli --test-threads=1
 
   rust-tests-dagger:
