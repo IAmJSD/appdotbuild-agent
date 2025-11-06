@@ -266,7 +266,27 @@ def main(
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_file = Path(apps_dir) / Path(f"bulk_run_results_{timestamp}.json")
 
-    output_file.write_text(json.dumps(results, indent=2))
+    # Add run metadata for eval script and MLflow
+    run_metadata = {
+        "run_timestamp": timestamp,
+        "n_jobs": n_jobs,
+        "use_subagents": use_subagents,
+        "screenshot_concurrency": screenshot_concurrency,
+        "screenshot_wait_time": screenshot_wait_time,
+        "mcp_binary": mcp_binary if mcp_binary else "cargo run",
+        "io_config": io_config,
+        "wipe_db": wipe_db,
+        "total_prompts": len(PROMPTS),
+        "successful_apps": len(successful),
+        "failed_apps": len(failed),
+    }
+
+    output_data = {
+        "metadata": run_metadata,
+        "results": results,
+    }
+
+    output_file.write_text(json.dumps(output_data, indent=2))
     print(f"Results saved to {output_file}")
 
 

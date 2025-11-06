@@ -754,23 +754,37 @@ def evaluate_app(app_dir: Path, prompt: str | None = None) -> EvalResult:
     )
 
 
-def load_prompts_from_bulk_results(bulk_results_file: Path) -> dict[str, str]:
-    """Load app prompts from bulk_run results JSON."""
+def load_prompts_from_bulk_results(bulk_results_file: Path) -> tuple[dict[str, str], dict[str, Any]]:
+    """Load app prompts and metadata from bulk_run results JSON.
+
+    Returns:
+        Tuple of (prompts_dict, metadata_dict)
+    """
     if not bulk_results_file.exists():
-        return {}
+        return {}, {}
 
     try:
         data = json.loads(bulk_results_file.read_text())
+
+        # Handle new format with metadata wrapper
+        if "metadata" in data and "results" in data:
+            metadata = data["metadata"]
+            results = data["results"]
+        else:
+            # Legacy format without metadata wrapper
+            metadata = {}
+            results = data
+
         prompts = {}
-        for result in data:
+        for result in results:
             app_dir = result.get("app_dir")
             prompt = result.get("prompt")
             if app_dir and prompt:
                 app_name = Path(app_dir).name
                 prompts[app_name] = prompt
-        return prompts
+        return prompts, metadata
     except Exception:
-        return {}
+        return {}, {}
 
 
 def main():
@@ -783,9 +797,9 @@ def main():
     script_dir = Path(__file__).parent
     apps_dir = script_dir.parent / "app"
 
-    # Load prompts from latest bulk results
-    results_files = sorted(script_dir.glob("../bulk_run_results_*.json"), reverse=True)
-    prompts = load_prompts_from_bulk_results(results_files[0]) if results_files else {}
+    # Load prompts and metadata from latest bulk results
+    results_files = sorted(apps_dir.glob("bulk_run_results_*.json"), reverse=True)
+    prompts, bulk_metadata = load_prompts_from_bulk_results(results_files[0]) if results_files else ({}, {})
 
     if sys.argv[1] == "--all":
         # Evaluate all apps
@@ -796,10 +810,19 @@ def main():
                 result = evaluate_app(app_dir, prompt)
                 results.append(asdict(result))
 
-        # Save combined results
+        # Save combined results with bulk run metadata
+        output_data = {
+            "bulk_run_metadata": bulk_metadata,
+            "eval_timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "results": results,
+        }
         output_file = script_dir / f"eval_results_{int(time.time())}.json"
-        output_file.write_text(json.dumps(results, indent=2))
+        output_file.write_text(json.dumps(output_data, indent=2))
         print(f"\n\nResults saved to: {output_file}")
+        if bulk_metadata:
+            print(f"Bulk run metadata:")
+            for key, value in bulk_metadata.items():
+                print(f"  {key}: {value}")
 
     else:
         # Evaluate single app
