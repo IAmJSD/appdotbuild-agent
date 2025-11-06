@@ -45,6 +45,24 @@ except ImportError:
 from evaluate_app import evaluate_app
 
 
+def get_git_commit_hash() -> str | None:
+    """Get the current git commit hash."""
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=Path(__file__).parent.parent,
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return None
+
+
 def load_prompts_and_metrics_from_bulk_run() -> tuple[dict[str, str], dict[str, dict]]:
     """Load prompts and generation metrics using PROMPTS dict from bulk_run.
 
@@ -719,7 +737,14 @@ def main():
         if tracker.enabled:
             # Start MLflow run
             run_name = f"eval-{timestamp}"
-            run_id = tracker.start_run(run_name=run_name, tags={"mode": "evaluation"})
+            tags = {"mode": "evaluation"}
+
+            # Add git commit hash if available
+            git_hash = get_git_commit_hash()
+            if git_hash:
+                tags["git_commit"] = git_hash
+
+            run_id = tracker.start_run(run_name=run_name, tags=tags)
 
             # Log parameters
             tracker.log_evaluation_parameters(
