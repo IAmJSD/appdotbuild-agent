@@ -43,6 +43,7 @@ except ImportError:
 
 # Import evaluate_app from evaluate_app.py - all evaluation logic is there
 from evaluate_app import evaluate_app
+from eval_metrics import eff_units
 
 
 def get_git_commit_hash() -> str | None:
@@ -668,6 +669,16 @@ def main():
             # Add generation metrics if available
             if app_dir.name in gen_metrics:
                 result_dict["generation_metrics"] = gen_metrics[app_dir.name]
+
+                # Calculate eff_units from generation_metrics if not already present
+                if result_dict["metrics"].get("eff_units") is None:
+                    gm = gen_metrics[app_dir.name]
+                    tokens = gm.get("input_tokens", 0) + gm.get("output_tokens", 0)
+                    result_dict["metrics"]["eff_units"] = eff_units(
+                        tokens_used=tokens if tokens > 0 else None,
+                        agent_turns=gm.get("turns"),
+                        validation_runs=gm.get("validation_runs", 0)
+                    )
 
             results.append(result_dict)
 
