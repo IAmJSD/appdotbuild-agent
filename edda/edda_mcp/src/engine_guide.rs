@@ -12,6 +12,8 @@ This project uses a state file (`.edda_state`) managed by edda MCP to enforce th
 
 Re-validation is allowed (Deployed → Validated) to update the checksum after intentional changes. The edda MCP tools enforce these state transitions and prevent invalid state changes.
 
+When in need to find some data (e.g. Databricks), use sub-agents for efficiency.
+
 ## Workflow:
 - Projects MUST end with validate_project to verify build + tests pass
 - Bias towards backend code when the task allows implementation in multiple places
