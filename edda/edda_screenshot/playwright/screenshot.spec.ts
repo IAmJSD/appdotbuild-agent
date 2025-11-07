@@ -20,8 +20,7 @@ test("capture app screenshot", async () => {
   const targetPort = process.env.TARGET_PORT || "8000";
   const timeout = parseInt(process.env.WAIT_TIME || "30000");
   const maxHeight = 10000;
-  const format = "webp";
-  const quality = 80;
+  const format = "png";
 
   // resolve hostname to IP to avoid SSL protocol errors with service binding
   const { stdout } = await execAsync("getent hosts app | awk '{ print $1 }'");
@@ -74,8 +73,7 @@ test("capture app screenshot", async () => {
       const screenshotOptions: any = {
         path: `/screenshots/screenshot.${format}`,
         fullPage: true,
-        type: format as "png" | "jpeg" | "webp",
-        quality: quality,
+        type: format as "png" | "jpeg",
       };
 
       // clip to max height if needed
@@ -94,7 +92,12 @@ test("capture app screenshot", async () => {
 
       await page.screenshot(screenshotOptions);
 
-      console.log(`Screenshot saved to /screenshots/screenshot.${format}`);
+      // compress PNG with oxipng (lossless, ~20-40% reduction)
+      const screenshotPath = `/screenshots/screenshot.${format}`;
+      console.log(`Compressing ${screenshotPath} with oxipng...`);
+      await execAsync(`oxipng -o 2 --strip all ${screenshotPath}`);
+
+      console.log(`Screenshot saved to ${screenshotPath}`);
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : String(error);

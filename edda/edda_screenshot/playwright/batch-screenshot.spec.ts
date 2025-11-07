@@ -76,14 +76,12 @@ async function screenshotApp(
     await mkdir(`/screenshots/app-${appIndex}`, { recursive: true });
 
     const maxHeight = 10000;
-    const format = "webp";
-    const quality = 80;
+    const format = "png";
 
     const screenshotOptions: any = {
       path: `/screenshots/app-${appIndex}/screenshot.${format}`,
       fullPage: true,
-      type: format as 'png' | 'jpeg' | 'webp',
-      quality: quality,
+      type: format as 'png' | 'jpeg',
     };
 
     // clip to max height if needed
@@ -101,6 +99,10 @@ async function screenshotApp(
     }
 
     await page.screenshot(screenshotOptions);
+
+    // compress PNG with oxipng (lossless, ~20-40% reduction)
+    const screenshotPath = `/screenshots/app-${appIndex}/screenshot.${format}`;
+    await execAsync(`oxipng -o 2 --strip all ${screenshotPath}`);
 
     console.log(`[app-${appIndex}] Screenshot saved`);
 
