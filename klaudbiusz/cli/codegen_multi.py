@@ -47,7 +47,7 @@ class MCPSession:
 
         if self.mcp_binary:
             server_params = StdioServerParameters(
-                command=self.mcp_binary, args=["--with-workspace-tools", "--with-deployment=false"], env=env
+                command=self.mcp_binary, args=["--with-workspace-tools=true", "--with-deployment=false"], env=env
             )
         else:
             server_params = StdioServerParameters(
@@ -57,7 +57,7 @@ class MCPSession:
                     "--manifest-path",
                     str(self.mcp_manifest),
                     "--",
-                    "--with-workspace-tools",
+                    "--with-workspace-tools=true",
                     "--with-deployment=false",
                 ],
                 env=env,
@@ -340,8 +340,7 @@ Be concise and to the point."""
 def cli(
     prompt: str,
     app_name: str | None = None,
-    # model: str = "gemini/gemini-2.5-pro",
-    model: str = "openrouter/minimax/minimax-m2",
+    model: str = "openrouter/minimax/minimax-m2",  # other good options: "openrouter/moonshotai/kimi-k2-thinking",  "gemini/gemini-2.5-pro"
     suppress_logs: bool = False,
     mcp_binary: str | None = None,
 ):
