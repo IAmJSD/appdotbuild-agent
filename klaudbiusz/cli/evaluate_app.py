@@ -50,6 +50,48 @@ from eval_checks import check_databricks_connectivity as _check_db_connectivity,
 from template_detection import detect_template
 
 
+def get_backend_dir(app_dir: Path, template: str) -> Path:
+    """Get backend directory based on template type."""
+    if template == "dbx-sdk":
+        # DBX SDK uses backend/
+        if (app_dir / "backend").exists():
+            return app_dir / "backend"
+    elif template == "trpc":
+        # tRPC uses server/
+        if (app_dir / "server").exists():
+            return app_dir / "server"
+
+    # Fallback: try both
+    if (app_dir / "backend").exists():
+        return app_dir / "backend"
+    if (app_dir / "server").exists():
+        return app_dir / "server"
+
+    # Default to backend if neither exists
+    return app_dir / "backend"
+
+
+def get_frontend_dir(app_dir: Path, template: str) -> Path:
+    """Get frontend directory based on template type."""
+    if template == "dbx-sdk":
+        # DBX SDK uses frontend/
+        if (app_dir / "frontend").exists():
+            return app_dir / "frontend"
+    elif template == "trpc":
+        # tRPC uses client/
+        if (app_dir / "client").exists():
+            return app_dir / "client"
+
+    # Fallback: try both
+    if (app_dir / "frontend").exists():
+        return app_dir / "frontend"
+    if (app_dir / "client").exists():
+        return app_dir / "client"
+
+    # Default to frontend if neither exists
+    return app_dir / "frontend"
+
+
 @dataclass
 class FullMetrics:
     """All 9 metrics from evals.md."""
@@ -117,82 +159,210 @@ def run_command(cmd: list[str], cwd: str | None = None, timeout: int = 300) -> t
         return False, "", str(e)
 
 
-def check_build_success(app_dir: Path) -> tuple[bool, dict]:
-    """Metric 1: Docker build succeeds."""
+def check_build_success(app_dir: Path, template: str = "unknown") -> tuple[bool, dict]:
+    """Metric 1: Docker build succeeds (or npm-based build for non-Docker apps)."""
     print("  [1/7] Checking build success...")
-    start = time.time()
+    start_time = time.time()
 
     dockerfile = app_dir / "Dockerfile"
     has_dockerfile = dockerfile.exists()
 
-    if not has_dockerfile:
-        return False, {"build_time_sec": 0.0, "has_dockerfile": False}
+    if has_dockerfile:
+        # Docker-based build
+        success, stdout, stderr = run_command(
+            ["docker", "build", "-t", f"eval-{app_dir.name}", "."],
+            cwd=str(app_dir),
+            timeout=300,
+        )
+        build_time = time.time() - start_time
+        return success, {"build_time_sec": round(build_time, 1), "has_dockerfile": True}
+    else:
+        # Non-Docker build: check if dependencies install and TypeScript compiles
+        # For DBX SDK and tRPC, this means npm install succeeds
+        success, _, _ = run_command(
+            ["npm", "install"],
+            cwd=str(app_dir),
+            timeout=180,
+        )
+        build_time = time.time() - start_time
+        return success, {"build_time_sec": round(build_time, 1), "has_dockerfile": False}
 
-    success, stdout, stderr = run_command(
-        ["docker", "build", "-t", f"eval-{app_dir.name}", "."],
-        cwd=str(app_dir),
-        timeout=300,
-    )
 
-    build_time = time.time() - start
-    return success, {"build_time_sec": round(build_time, 1), "has_dockerfile": True}
+def check_runtime_success(app_dir: Path, container_name: str, _template: str = "unknown") -> tuple[bool, dict]:
+    """Metric 2: App starts and responds to requests.
 
-
-def check_runtime_success(app_dir: Path, container_name: str) -> tuple[bool, dict]:
-    """Metric 2: Container starts and health check responds."""
+    Uses start/stop scripts for npm-based apps.
+    Docker apps are handled with direct docker commands (no start.sh support).
+    """
     print("  [2/7] Checking runtime success...")
 
-    # Start container
-    env_file = app_dir.parent.parent / ".env"
-    env_args = ["--env-file", str(env_file)] if env_file.exists() else []
+    # Clean up any existing processes/containers before starting
+    _stop_app(app_dir)
 
-    # Add Databricks env vars from environment
-    env_vars = []
-    if "DATABRICKS_HOST" in os.environ:
-        env_vars.extend(["-e", f"DATABRICKS_HOST={os.environ['DATABRICKS_HOST']}"])
-    if "DATABRICKS_TOKEN" in os.environ:
-        env_vars.extend(["-e", f"DATABRICKS_TOKEN={os.environ['DATABRICKS_TOKEN']}"])
-    if "DATABRICKS_WAREHOUSE_ID" in os.environ:
-        env_vars.extend(["-e", f"DATABRICKS_WAREHOUSE_ID={os.environ['DATABRICKS_WAREHOUSE_ID']}"])
+    dockerfile = app_dir / "Dockerfile"
+    process = None
 
-    success, stdout, stderr = run_command(
-        [
-            "docker",
-            "run",
-            "-d",
-            "-p",
-            "8000:8000",
-            "--name",
-            container_name,
-            *env_args,
-            *env_vars,
-            f"eval-{app_dir.name}",
-        ],
-        timeout=30,
-    )
+    try:
+        # START: Launch the app based on type
+        if dockerfile.exists():
+            # Docker-based runtime
+            env_file = app_dir.parent.parent / ".env"
+            env_args = ["--env-file", str(env_file)] if env_file.exists() else []
 
-    if not success:
+            # Add Databricks env vars from environment
+            env_vars = []
+            for var in ["DATABRICKS_HOST", "DATABRICKS_TOKEN", "DATABRICKS_WAREHOUSE_ID"]:
+                if var in os.environ:
+                    env_vars.extend(["-e", f"{var}={os.environ[var]}"])
+
+            # Add OAuth credentials (required by @dbx/sdk)
+            client_id = os.environ.get("DATABRICKS_CLIENT_ID", "eval-mock-client-id")
+            client_secret = os.environ.get("DATABRICKS_CLIENT_SECRET", "eval-mock-client-secret")
+            app_name = os.environ.get("DATABRICKS_APP_NAME", app_dir.name)
+            env_vars.extend(["-e", f"DATABRICKS_CLIENT_ID={client_id}"])
+            env_vars.extend(["-e", f"DATABRICKS_CLIENT_SECRET={client_secret}"])
+            env_vars.extend(["-e", f"DATABRICKS_APP_NAME={app_name}"])
+
+            # Add server plugin requirements
+            app_port = os.environ.get("DATABRICKS_APP_PORT", "8000")
+            flask_host = os.environ.get("FLASK_RUN_HOST", "0.0.0.0")
+            env_vars.extend(["-e", f"DATABRICKS_APP_PORT={app_port}"])
+            env_vars.extend(["-e", f"FLASK_RUN_HOST={flask_host}"])
+
+            success, _stdout, _stderr = run_command(
+                [
+                    "docker", "run", "-d", "-p", "8000:8000",
+                    "--name", container_name,
+                    *env_args, *env_vars,
+                    f"eval-{app_dir.name}",
+                ],
+                timeout=30,
+            )
+
+            if not success:
+                return False, {}
+
+            # Wait for Docker container to start
+            time.sleep(5)
+
+        else:
+            # npm-based runtime using start.sh script
+            start_script = Path(__file__).parent / "eval" / "start.sh"
+            if not start_script.exists():
+                print(f"  ⚠️  Eval start.sh not found at {start_script}")
+                return False, {}
+
+            # Prepare environment variables
+            env = os.environ.copy()
+            if not env.get("DATABRICKS_HOST") or not env.get("DATABRICKS_TOKEN"):
+                print(f"  ⚠️  Missing DATABRICKS_HOST or DATABRICKS_TOKEN")
+                return False, {}
+
+            # Add OAuth credentials with mock values if not provided
+            env.setdefault("DATABRICKS_CLIENT_ID", "eval-mock-client-id")
+            env.setdefault("DATABRICKS_CLIENT_SECRET", "eval-mock-client-secret")
+            env.setdefault("DATABRICKS_APP_NAME", app_dir.name)
+            env.setdefault("DATABRICKS_WAREHOUSE_ID", "")
+            env.setdefault("DATABRICKS_APP_PORT", "8000")
+            env.setdefault("FLASK_RUN_HOST", "0.0.0.0")
+
+            # Start the app in background
+            process = subprocess.Popen(
+                ["bash", str(start_script)],
+                cwd=str(app_dir),
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+
+            # Wait for npm app to start
+            time.sleep(10)
+
+            # Check if process is still running
+            if process.poll() is not None:
+                _stdout, stderr = process.communicate(timeout=1)
+                print(f"  ⚠️  Process died during startup (exit code: {process.returncode})")
+                if stderr:
+                    print(f"  Error output:")
+                    for line in stderr.strip().split('\n')[:10]:
+                        print(f"    {line}")
+                return False, {}
+
+        # HEALTH CHECK: Try to reach the app
+        start_time = time.time()
+        for _ in range(6):  # Try for 30 seconds
+            # Try healthcheck endpoint
+            success, _stdout, _stderr = run_command(
+                ["curl", "-f", "-s", "http://localhost:8000/healthcheck"],
+                timeout=10,
+            )
+            if success:
+                startup_time = time.time() - start_time
+                _stop_app(app_dir)
+                return True, {"startup_time_sec": round(startup_time, 1)}
+
+            # Try root endpoint as fallback (for npm apps)
+            if not dockerfile.exists():
+                success, _stdout, _stderr = run_command(
+                    ["curl", "-f", "-s", "http://localhost:8000/"],
+                    timeout=10,
+                )
+                if success:
+                    startup_time = time.time() - start_time
+                    _stop_app(app_dir)
+                    return True, {"startup_time_sec": round(startup_time, 1)}
+
+            time.sleep(5)
+
+        # Failed to connect
+        _stop_app(app_dir)
         return False, {}
 
-    # Wait for startup
-    time.sleep(5)
-
-    # Check health endpoint
-    start = time.time()
-    for _ in range(6):  # Try for 30 seconds
-        success, stdout, stderr = run_command(
-            ["curl", "-f", "-s", "http://localhost:8000/healthcheck"],
-            timeout=10,
-        )
-        if success:
-            startup_time = time.time() - start
-            return True, {"startup_time_sec": round(startup_time, 1)}
-        time.sleep(5)
-
-    return False, {}
+    except Exception:
+        # Ensure cleanup on any exception
+        _stop_app(app_dir)
+        return False, {}
 
 
-def install_dependencies(app_dir: Path) -> bool:
+def _stop_app(app_dir: Path) -> bool:
+    """Stop app using eval stop.sh script template."""
+    try:
+        # Use stop script from eval templates
+        stop_script_template = Path(__file__).parent / "eval" / "stop.sh"
+
+        if stop_script_template.exists():
+            success, _, _ = run_command(
+                ["bash", str(stop_script_template)],
+                cwd=str(app_dir),
+                timeout=10,
+            )
+            time.sleep(1)  # Give the OS time to release resources
+            return success
+        else:
+            # Fallback to manual cleanup
+            subprocess.run(
+                ["bash", "-c", "lsof -ti:8000 | xargs kill -9 2>/dev/null || true"],
+                capture_output=True,
+                timeout=5,
+            )
+            time.sleep(1)
+            return True
+    except Exception:
+        # Fallback to manual cleanup
+        try:
+            subprocess.run(
+                ["bash", "-c", "lsof -ti:8000 | xargs kill -9 2>/dev/null || true"],
+                capture_output=True,
+                timeout=5,
+            )
+            time.sleep(1)
+        except:
+            pass
+        return False
+
+
+def install_dependencies(app_dir: Path, template: str = "unknown") -> bool:
     """Install npm dependencies for both client and server."""
     print("  [0/7] Installing dependencies...")
 
@@ -210,8 +380,8 @@ def install_dependencies(app_dir: Path) -> bool:
         else:
             print("    ⚠️  Root npm install failed")
 
-    # Try server/ or backend/
-    server_dir = app_dir / "server" if (app_dir / "server").exists() else app_dir / "backend"
+    # Try server/ or backend/ based on template
+    server_dir = get_backend_dir(app_dir, template)
     if server_dir.exists() and (server_dir / "package.json").exists():
         server_success, _, _ = run_command(
             ["npm", "install"],
@@ -225,8 +395,8 @@ def install_dependencies(app_dir: Path) -> bool:
         print(f"    ⚠️  No {server_dir.name} directory or package.json")
         return False
 
-    # Try client/ or frontend/
-    client_dir = app_dir / "client" if (app_dir / "client").exists() else app_dir / "frontend"
+    # Try client/ or frontend/ based on template
+    client_dir = get_frontend_dir(app_dir, template)
     if client_dir.exists() and (client_dir / "package.json").exists():
         client_success, _, _ = run_command(
             ["npm", "install"],
@@ -241,12 +411,12 @@ def install_dependencies(app_dir: Path) -> bool:
     return True
 
 
-def check_type_safety(app_dir: Path) -> bool:
+def check_type_safety(app_dir: Path, template: str = "unknown") -> bool:
     """Metric 3: TypeScript compiles without errors."""
     print("  [3/7] Checking type safety...")
 
-    # Check server or backend
-    server_dir = app_dir / "server" if (app_dir / "server").exists() else app_dir / "backend"
+    # Check server or backend based on template
+    server_dir = get_backend_dir(app_dir, template)
     server_success = True
     if server_dir.exists():
         server_success, _, _ = run_command(
@@ -268,12 +438,12 @@ def check_type_safety(app_dir: Path) -> bool:
     return server_success and client_success
 
 
-def check_tests_pass(app_dir: Path) -> tuple[bool, float, bool]:
+def check_tests_pass(app_dir: Path, template: str = "unknown") -> tuple[bool, float, bool]:
     """Metric 4: Tests pass with coverage."""
     print("  [4/7] Checking tests pass...")
 
-    # Find server or backend dir
-    server_dir = app_dir / "server" if (app_dir / "server").exists() else app_dir / "backend"
+    # Find server or backend dir based on template
+    server_dir = get_backend_dir(app_dir, template)
 
     if not server_dir.exists():
         return False, 0.0, False
@@ -368,7 +538,7 @@ Respond with ONLY: YES or NO""",
         return False, f"LLM check failed: {str(e)}"
 
 
-def check_ui_functional_vlm(app_dir: Path, prompt: str | None) -> tuple[bool, str]:
+def check_ui_functional_vlm(app_dir: Path, _prompt: str | None) -> tuple[bool, str]:
     """Metric 7: VLM binary check - does UI render without errors?
 
     Returns: (passes: bool, details: str)
@@ -449,7 +619,7 @@ Respond with ONLY one word: PASS or FAIL""",
         return False, f"VLM check failed: {str(e)}"
 
 
-def check_local_runability(app_dir: Path) -> tuple[int, list[str]]:
+def check_local_runability(app_dir: Path, template: str = "unknown") -> tuple[int, list[str]]:
     """Metric 8: Local runability - how easy is it to run locally?"""
     print("  [8/9] Checking local runability...")
 
@@ -475,8 +645,8 @@ def check_local_runability(app_dir: Path) -> tuple[int, list[str]]:
     else:
         details.append("✗ No .env.example or .env.template")
 
-    # Check 3: Dependencies install cleanly
-    server_dir = app_dir / "server" if (app_dir / "server").exists() else app_dir / "backend"
+    # Check 3: Dependencies install cleanly based on template
+    server_dir = get_backend_dir(app_dir, template)
     if server_dir.exists():
         server_install, _, _ = run_command(
             ["npm", "install", "--dry-run"],
@@ -492,10 +662,15 @@ def check_local_runability(app_dir: Path) -> tuple[int, list[str]]:
         details.append("✗ No server/backend directory")
 
     # Check 4: npm start command defined
-    server_pkg = server_dir / "package.json" if server_dir.exists() else None
-    if server_pkg and server_pkg.exists():
+    # For DBX SDK (root package.json) check root, for tRPC check server_dir
+    if template == "dbx-sdk":
+        pkg_path = app_dir / "package.json"
+    else:
+        pkg_path = server_dir / "package.json" if server_dir.exists() else None
+
+    if pkg_path and pkg_path.exists():
         try:
-            pkg_data = json.loads(server_pkg.read_text())
+            pkg_data = json.loads(pkg_path.read_text())
             if "start" in pkg_data.get("scripts", {}):
                 score += 1
                 details.append("✓ npm start command defined")
@@ -598,12 +773,6 @@ def check_deployability(app_dir: Path) -> tuple[int, list[str]]:
     return score, details
 
 
-def cleanup_container(container_name: str):
-    """Stop and remove container."""
-    run_command(["docker", "stop", container_name], timeout=10)
-    run_command(["docker", "rm", container_name], timeout=10)
-
-
 def evaluate_app(app_dir: Path, prompt: str | None = None) -> EvalResult:
     """Run full evaluation on an app."""
     print(f"\nEvaluating: {app_dir.name}")
@@ -623,27 +792,32 @@ def evaluate_app(app_dir: Path, prompt: str | None = None) -> EvalResult:
 
     try:
         # Install dependencies first (needed for TypeScript and tests)
-        deps_installed = install_dependencies(app_dir)
+        deps_installed = install_dependencies(app_dir, template)
 
         # Metric 1: Build
-        build_success, build_meta = check_build_success(app_dir)
+        build_success, build_meta = check_build_success(app_dir, template)
         metrics.build_success = build_success
         metrics.build_time_sec = build_meta.get("build_time_sec", 0.0)
         metrics.has_dockerfile = build_meta.get("has_dockerfile", False)
         if not build_success:
-            issues.append("Docker build failed")
+            if build_meta.get("has_dockerfile"):
+                issues.append("Docker build failed")
+            else:
+                issues.append("Build failed (npm install)")
 
-        # Metric 2: Runtime (only if build succeeded)
-        if build_success:
-            runtime_success, runtime_meta = check_runtime_success(app_dir, container_name)
-            metrics.runtime_success = runtime_success
-            metrics.startup_time_sec = runtime_meta.get("startup_time_sec", 0.0)
-            if not runtime_success:
+        # Metric 2: Runtime (always try, not just if build succeeded)
+        runtime_success, runtime_meta = check_runtime_success(app_dir, container_name, template)
+        metrics.runtime_success = runtime_success
+        metrics.startup_time_sec = runtime_meta.get("startup_time_sec", 0.0)
+        if not runtime_success:
+            if build_meta.get("has_dockerfile"):
                 issues.append("Container failed to start or healthcheck failed")
+            else:
+                issues.append("App failed to start or respond")
 
         # Metric 3: Type safety (requires dependencies)
         if deps_installed:
-            type_safety = check_type_safety(app_dir)
+            type_safety = check_type_safety(app_dir, template)
             metrics.type_safety = type_safety
             # Only flag TS errors as issues if they cause build/runtime problems
             # (Since apps use tsx which skips type checking, TS strictness is informational)
@@ -654,7 +828,7 @@ def evaluate_app(app_dir: Path, prompt: str | None = None) -> EvalResult:
 
         # Metric 4: Tests (requires dependencies)
         if deps_installed:
-            tests_pass, coverage, has_tests = check_tests_pass(app_dir)
+            tests_pass, coverage, has_tests = check_tests_pass(app_dir, template)
             metrics.tests_pass = tests_pass
             metrics.test_coverage_pct = coverage
             metrics.has_tests = has_tests
@@ -684,7 +858,7 @@ def evaluate_app(app_dir: Path, prompt: str | None = None) -> EvalResult:
                 issues.append(f"UI concerns: {ui_details}")
 
         # Metric 8: Local runability (DevX)
-        local_score, local_details = check_local_runability(app_dir)
+        local_score, local_details = check_local_runability(app_dir, template)
         metrics.local_runability_score = local_score
         details["local_runability"] = local_details
         if local_score < 3:
@@ -732,8 +906,8 @@ def evaluate_app(app_dir: Path, prompt: str | None = None) -> EvalResult:
         )
 
     finally:
-        # Always cleanup container if it exists (regardless of success/failure)
-        cleanup_container(container_name)
+        # Always cleanup any running apps/containers
+        _stop_app(app_dir)
 
     print(f"\nIssues: {len(issues)}")
 
