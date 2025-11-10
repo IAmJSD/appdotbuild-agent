@@ -298,8 +298,9 @@ Be concise and to the point."""
             )
             await agent.initialize()
 
-            # use relative path (resolves from CWD where user runs the command)
-            user_prompt = f"App name: {self.app_name}\nApp directory: ./app/{self.app_name}\n\nTask: {prompt}"
+            # compute absolute path for MCP tool (scaffold_data_app requires absolute path)
+            app_dir = Path.cwd() / "app" / self.app_name
+            user_prompt = f"App name: {self.app_name}\nApp directory: {app_dir}\n\nTask: {prompt}"
             metrics = await agent.run(user_prompt)
 
             # save trajectory via tracker

@@ -182,7 +182,9 @@ Use up to 10 tools per call to speed up the process.\n"""
         }
 
         # inject app_name into user prompt to avoid caching issues with system prompt
-        user_prompt = f"App name: {self.app_name}\nApp directory: ./app/{self.app_name}\n\nTask: {prompt}"
+        # use absolute path for MCP tool (scaffold_data_app requires absolute path)
+        app_dir = Path.cwd() / "app" / self.app_name
+        user_prompt = f"App name: {self.app_name}\nApp directory: {app_dir}\n\nTask: {prompt}"
 
         try:
             async for message in query(prompt=user_prompt, options=options):
