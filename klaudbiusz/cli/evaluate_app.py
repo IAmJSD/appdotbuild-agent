@@ -160,7 +160,7 @@ def run_command(cmd: list[str], cwd: str | None = None, timeout: int = 300) -> t
 
 
 def check_build_success(app_dir: Path, template: str = "unknown") -> tuple[bool, dict]:
-    """Metric 1: Docker build succeeds (or npm-based build for non-Docker apps)."""
+    """Metric 1: Build succeeds - creates deployment artifacts (frontend build)."""
     print("  [1/7] Checking build success...")
     start_time = time.time()
 
@@ -168,24 +168,68 @@ def check_build_success(app_dir: Path, template: str = "unknown") -> tuple[bool,
     has_dockerfile = dockerfile.exists()
 
     if has_dockerfile:
-        # Docker-based build
-        success, stdout, stderr = run_command(
+        # Docker-based build (comprehensive build including backend + frontend)
+        success, _stdout, _stderr = run_command(
             ["docker", "build", "-t", f"eval-{app_dir.name}", "."],
             cwd=str(app_dir),
             timeout=300,
         )
         build_time = time.time() - start_time
         return success, {"build_time_sec": round(build_time, 1), "has_dockerfile": True}
+
+    # Non-Docker build: build frontend
+    import json
+
+    if template == "dbx-sdk":
+        # DBX SDK: root package.json with backend/ directory
+        package_json = app_dir / "package.json"
+        if not package_json.exists():
+            return False, {"build_time_sec": 0.0, "has_dockerfile": False}
+
+        try:
+            pkg_data = json.loads(package_json.read_text())
+            scripts = pkg_data.get("scripts", {})
+        except Exception:
+            return False, {"build_time_sec": 0.0, "has_dockerfile": False}
+
+        # Build frontend using npm run build
+        if "build" in scripts:
+            success, _, _ = run_command(
+                ["npm", "run", "build"],
+                cwd=str(app_dir),
+                timeout=300,
+            )
+        else:
+            # No build script - failure for production apps
+            success = False
+
     else:
-        # Non-Docker build: check if dependencies install and TypeScript compiles
-        # For DBX SDK and tRPC, this means npm install succeeds
-        success, _, _ = run_command(
-            ["npm", "install"],
-            cwd=str(app_dir),
-            timeout=180,
-        )
-        build_time = time.time() - start_time
-        return success, {"build_time_sec": round(build_time, 1), "has_dockerfile": False}
+        # tRPC: separate server/ and client/ directories
+        client_dir = get_frontend_dir(app_dir, template)
+
+        # Build client (if has build script)
+        success = False
+        if client_dir.exists() and (client_dir / "package.json").exists():
+            try:
+                client_pkg = json.loads((client_dir / "package.json").read_text())
+                has_build = "build" in client_pkg.get("scripts", {})
+                if has_build:
+                    success, _, _ = run_command(
+                        ["npm", "run", "build"],
+                        cwd=str(client_dir),
+                        timeout=300,
+                    )
+                else:
+                    # No build script in client package.json
+                    success = False
+            except Exception:
+                success = False
+        else:
+            # No client directory or package.json - fail
+            success = False
+
+    build_time = time.time() - start_time
+    return success, {"build_time_sec": round(build_time, 1), "has_dockerfile": False}
 
 
 def check_runtime_success(app_dir: Path, container_name: str, _template: str = "unknown") -> tuple[bool, dict]:
@@ -415,22 +459,51 @@ def check_type_safety(app_dir: Path, template: str = "unknown") -> bool:
     """Metric 3: TypeScript compiles without errors."""
     print("  [3/7] Checking type safety...")
 
-    # Check server or backend based on template
+    # DBX SDK apps: use npm run check
+    if template == "dbx-sdk":
+        package_json = app_dir / "package.json"
+        if not package_json.exists():
+            return False
+
+        try:
+            import json
+            pkg_data = json.loads(package_json.read_text())
+            scripts = pkg_data.get("scripts", {})
+        except Exception:
+            return False
+
+        # Use npm run check if available (standard for DBX SDK apps)
+        if "check" in scripts:
+            success, _, _ = run_command(
+                ["npm", "run", "check"],
+                cwd=str(app_dir),
+                timeout=60,
+            )
+        else:
+            # Fallback: run tsc directly
+            success, _, _ = run_command(
+                ["npx", "tsc", "--noEmit", "--skipLibCheck"],
+                cwd=str(app_dir),
+                timeout=60,
+            )
+
+        return success
+
+    # tRPC apps: check server and client separately
     server_dir = get_backend_dir(app_dir, template)
     server_success = True
-    if server_dir.exists():
+    if server_dir.exists() and (server_dir / "tsconfig.json").exists():
         server_success, _, _ = run_command(
-            ["npx", "tsc", "--noEmit"],
+            ["npx", "tsc", "--noEmit", "--skipLibCheck"],
             cwd=str(server_dir),
             timeout=60,
         )
 
-    # Check client or frontend
     client_dir = app_dir / "client" if (app_dir / "client").exists() else app_dir / "frontend"
     client_success = True
-    if client_dir.exists():
+    if client_dir.exists() and (client_dir / "tsconfig.json").exists():
         client_success, _, _ = run_command(
-            ["npx", "tsc", "--noEmit"],
+            ["npx", "tsc", "--noEmit", "--skipLibCheck"],
             cwd=str(client_dir),
             timeout=60,
         )
@@ -439,34 +512,62 @@ def check_type_safety(app_dir: Path, template: str = "unknown") -> bool:
 
 
 def check_tests_pass(app_dir: Path, template: str = "unknown") -> tuple[bool, float, bool]:
-    """Metric 4: Tests pass with coverage."""
+    """Metric 4: Tests pass with coverage.
+
+    For DBX SDK: No test infrastructure in template - always fail.
+    For tRPC: Use root package.json test script (runnable from docker).
+    """
     print("  [4/7] Checking tests pass...")
 
-    # Find server or backend dir based on template
-    server_dir = get_backend_dir(app_dir, template)
+    if template == "dbx-sdk":
+        # DBX SDK apps don't have test infrastructure in the template
+        # Report fail for now (no test script in package.json)
+        return False, 0.0, False
 
+    # tRPC: Use root-level test command (works from docker)
+    # Root package.json has: "test": "cd server && npm test"
+    package_json = app_dir / "package.json"
+    if not package_json.exists():
+        return False, 0.0, False
+
+    try:
+        import json
+        pkg_data = json.loads(package_json.read_text())
+        scripts = pkg_data.get("scripts", {})
+    except Exception:
+        return False, 0.0, False
+
+    # Check if test script exists
+    if "test" not in scripts:
+        return False, 0.0, False
+
+    # Check for test files in server/src
+    server_dir = get_backend_dir(app_dir, template)
     if not server_dir.exists():
         return False, 0.0, False
 
+    server_src = server_dir / "src"
+    if not server_src.exists():
+        return False, 0.0, False
+
+    test_files = list(server_src.glob("*.test.ts")) + list(server_src.glob("**/*.test.ts"))
+    has_tests = len(test_files) > 0
+
+    if not has_tests:
+        return False, 0.0, False
+
+    # Run tests from root using the test script (same as docker would)
     success, stdout, stderr = run_command(
-        ["npm", "test", "--", "--experimental-test-coverage"],
-        cwd=str(server_dir),
+        ["npm", "test"],
+        cwd=str(app_dir),
         timeout=120,
     )
 
-    # Check if tests exist
-    src_dir = server_dir / "src"
-    test_files = []
-    if src_dir.exists():
-        test_files = list(src_dir.glob("*.test.ts")) + list(src_dir.glob("**/*.test.ts"))
-    has_tests = len(test_files) > 0
-
-    # Parse coverage from output (node's test runner output format)
+    # Parse coverage from Node.js test runner output
     coverage_pct = 0.0
     output = stdout + stderr
     for line in output.split("\n"):
         if "all files" in line.lower() and "%" in line:
-            # Try to extract percentage
             parts = line.split("|")
             if len(parts) >= 2:
                 try:
