@@ -127,7 +127,7 @@ class LiteLLMAgent:
                     messages=self.messages,
                     tools=self.tools if self.tools else None,
                     temperature=self.temperature,
-                    max_tokens=4096,
+                    max_tokens=8192,  # increased to handle longer tool arguments
                 )
 
                 if hasattr(response, "usage") and response.usage:  # type: ignore[attr-defined]
@@ -286,7 +286,10 @@ Be concise and to the point."""
     async def run_async(self, prompt: str) -> GenerationMetrics:
         setup_logging(self.suppress_logs, self.mcp_binary)
 
-        async with MCPSession(self.mcp_binary) as session:
+        mcp_session = MCPSession(self.mcp_binary)
+        try:
+            session = await mcp_session.__aenter__()
+
             system_prompt = self._build_system_prompt()
 
             agent = LiteLLMAgent(
@@ -324,6 +327,12 @@ Be concise and to the point."""
                 logger.info(f"{'=' * 80}\n")
 
             return metrics
+        finally:
+            # explicitly cleanup to avoid asyncio context issues with multiprocessing
+            try:
+                await mcp_session.__aexit__(None, None, None)
+            except Exception:
+                pass  # suppress cleanup errors in multiprocessing
 
     def run(self, prompt: str) -> GenerationMetrics:
         return asyncio.run(self.run_async(prompt))
