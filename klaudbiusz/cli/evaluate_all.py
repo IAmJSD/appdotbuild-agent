@@ -19,6 +19,7 @@ import json
 import sys
 from datetime import datetime
 from dotenv import load_dotenv
+from joblib import Parallel, delayed
 
 # Load environment variables from .env file
 load_dotenv()
@@ -558,6 +559,8 @@ Examples:
   python evaluate_all.py --skip 10                # Skip first 10 apps
   python evaluate_all.py --start-from app5        # Start from specific app
   python evaluate_all.py --limit 10 --skip 5      # Evaluate 10 apps starting from 6th
+  python evaluate_all.py -j 4                     # Evaluate 4 apps in parallel
+  python evaluate_all.py -j 0                     # Auto-detect CPU count and parallelize
         """
     )
 
@@ -571,6 +574,15 @@ Examples:
         '--staging',
         action='store_true',
         help='Report results to staging MLflow experiment (/Shared/edda-staging-evaluations)'
+    )
+
+    parser.add_argument(
+        '--parallel',
+        '-j',
+        type=int,
+        metavar='N',
+        default=1,
+        help='Run N evaluations in parallel (default: 1 = sequential). Use -j 0 for auto (CPU count)'
     )
 
     filter_group = parser.add_argument_group('app filtering')
@@ -654,6 +666,50 @@ def filter_app_dirs(app_dirs: list[Path], args) -> list[Path]:
     return filtered
 
 
+def evaluate_app_with_metadata(
+    app_dir: Path,
+    prompt: str | None,
+    gen_metrics: dict,
+    index: int,
+    total: int
+) -> dict | None:
+    """
+    Wrapper for evaluate_app that adds generation metrics and handles errors.
+    Designed to work with joblib.Parallel.
+    """
+    print(f"\n[{index}/{total}] {app_dir.name}")
+
+    # Assign unique port for parallel execution to avoid Docker port conflicts
+    # Base port 8000 + index, supports up to ~60k parallel workers
+    port = 8000 + index
+
+    try:
+        result = evaluate_app(app_dir, prompt, port)
+        result_dict = asdict(result)
+
+        # Add generation metrics if available
+        if app_dir.name in gen_metrics:
+            result_dict["generation_metrics"] = gen_metrics[app_dir.name]
+
+            # Calculate eff_units from generation_metrics if not already present
+            if result_dict["metrics"].get("eff_units") is None:
+                gm = gen_metrics[app_dir.name]
+                tokens = gm.get("input_tokens", 0) + gm.get("output_tokens", 0)
+                result_dict["metrics"]["eff_units"] = eff_units(
+                    tokens_used=tokens if tokens > 0 else None,
+                    agent_turns=gm.get("turns"),
+                    validation_runs=gm.get("validation_runs", 0)
+                )
+
+        return result_dict
+
+    except KeyboardInterrupt:
+        raise  # Re-raise to allow user to stop
+    except Exception as e:
+        print(f"❌ Error evaluating {app_dir.name}: {e}")
+        return None  # Return None for failed evaluations
+
+
 def main():
     """Main entry point."""
     args = parse_args()
@@ -679,6 +735,16 @@ def main():
     # Filter based on command-line arguments
     app_dirs = filter_app_dirs(all_app_dirs, args)
 
+    # Auto-detect CPU count if --parallel 0
+    import os
+    cpu_count = os.cpu_count() or 1
+    if args.parallel == 0:
+        args.parallel = cpu_count
+        print(f"🔧 Auto-detected {cpu_count} CPUs, using --parallel {args.parallel}")
+    elif args.parallel < 0:
+        print(f"Error: --parallel must be >= 0 (got {args.parallel})")
+        sys.exit(1)
+
     print(f"🔍 Evaluating {len(app_dirs)} apps (out of {len(all_app_dirs)} total)...")
     print(f"   Directory: {apps_dir}")
     if args.apps:
@@ -691,43 +757,63 @@ def main():
         print(f"   Filter: starting from '{args.start_from}'")
     if args.limit:
         print(f"   Filter: limit to {args.limit} apps")
+    if args.parallel > 1:
+        print(f"   Parallelism: {args.parallel} workers")
     print("=" * 60)
 
-    results = []
-    for i, app_dir in enumerate(app_dirs, 1):
-        print(f"\n[{i}/{len(app_dirs)}] {app_dir.name}")
+    # Warn if parallelism is too high
+    if args.parallel > 1:
+        if args.parallel > cpu_count:
+            print(f"⚠️  Warning: Requested {args.parallel} parallel jobs but system has {cpu_count} CPUs")
+            print(f"   Consider using --parallel {cpu_count} for optimal performance")
+        if args.parallel > len(app_dirs):
+            print(f"⚠️  Warning: Using {args.parallel} workers for {len(app_dirs)} apps")
+            print(f"   Consider using --parallel {len(app_dirs)} to avoid idle workers")
 
-        try:
-            prompt = prompts.get(app_dir.name)
-            result = evaluate_app(app_dir, prompt)
-            result_dict = asdict(result)
+    # Track timing
+    eval_start_time = time.time()
 
-            # Add generation metrics if available
-            if app_dir.name in gen_metrics:
-                result_dict["generation_metrics"] = gen_metrics[app_dir.name]
+    # Run evaluations (sequential or parallel based on --parallel flag)
+    if args.parallel > 1:
+        print(f"🚀 Running {args.parallel} evaluations in parallel...")
 
-                # Calculate eff_units from generation_metrics if not already present
-                if result_dict["metrics"].get("eff_units") is None:
-                    gm = gen_metrics[app_dir.name]
-                    tokens = gm.get("input_tokens", 0) + gm.get("output_tokens", 0)
-                    result_dict["metrics"]["eff_units"] = eff_units(
-                        tokens_used=tokens if tokens > 0 else None,
-                        agent_turns=gm.get("turns"),
-                        validation_runs=gm.get("validation_runs", 0)
-                    )
+        # Use joblib for parallel execution
+        results = Parallel(n_jobs=args.parallel, backend="loky", verbose=5)(
+            delayed(evaluate_app_with_metadata)(
+                app_dir,
+                prompts.get(app_dir.name),
+                gen_metrics,
+                i,
+                len(app_dirs)
+            )
+            for i, app_dir in enumerate(app_dirs, 1)
+        )
 
-            results.append(result_dict)
+        # Filter out None results (failed evaluations)
+        results = [r for r in results if r is not None]
 
-            # Quick status
-            status = "✓" if len(result.issues) <= 2 else "⚠" if len(result.issues) <= 4 else "✗"
-            print(f"  {status} {len(result.issues)} issues")
+    else:
+        # Sequential execution (existing logic)
+        print("🔄 Running evaluations sequentially...")
+        results = []
+        for i, app_dir in enumerate(app_dirs, 1):
+            result_dict = evaluate_app_with_metadata(
+                app_dir,
+                prompts.get(app_dir.name),
+                gen_metrics,
+                i,
+                len(app_dirs)
+            )
+            if result_dict is not None:
+                results.append(result_dict)
 
-        except Exception as e:
-            print(f"  ✗ Error: {str(e)}")
-            continue
+    eval_duration = time.time() - eval_start_time
 
     print("\n" + "=" * 60)
-    print(f"✅ Evaluated {len(results)}/{len(app_dirs)} apps")
+    print(f"✅ Evaluated {len(results)}/{len(app_dirs)} apps in {eval_duration:.1f}s")
+    if args.parallel > 1:
+        estimated_sequential = eval_duration * args.parallel
+        print(f"   ⚡ Parallelization saved ~{estimated_sequential - eval_duration:.1f}s (speedup: {estimated_sequential/eval_duration:.1f}x)")
 
     # Generate summary and report
     print("\n📊 Generating summary report...")

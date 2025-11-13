@@ -233,7 +233,7 @@ def check_build_success(app_dir: Path, template: str = "unknown") -> tuple[bool,
     return success, {"build_time_sec": round(build_time, 1), "has_dockerfile": False}
 
 
-def _prepare_runtime_env(app_dir: Path, container_name: str = "") -> dict[str, str]:
+def _prepare_runtime_env(app_dir: Path, container_name: str = "", port: int = 8000) -> dict[str, str]:
     """Prepare environment variables for runtime check."""
     env = os.environ.copy()
 
@@ -246,7 +246,7 @@ def _prepare_runtime_env(app_dir: Path, container_name: str = "") -> dict[str, s
     env.setdefault("DATABRICKS_CLIENT_SECRET", "eval-mock-client-secret")
     env.setdefault("DATABRICKS_APP_NAME", app_dir.name)
     env.setdefault("DATABRICKS_WAREHOUSE_ID", "")
-    env.setdefault("DATABRICKS_APP_PORT", "8000")
+    env.setdefault("DATABRICKS_APP_PORT", str(port))
     env.setdefault("FLASK_RUN_HOST", "0.0.0.0")
 
     # Container name for docker scripts
@@ -256,7 +256,7 @@ def _prepare_runtime_env(app_dir: Path, container_name: str = "") -> dict[str, s
     return env
 
 
-def check_runtime_success(app_dir: Path, container_name: str, template: str = "unknown") -> tuple[bool, dict]:
+def check_runtime_success(app_dir: Path, container_name: str, template: str = "unknown", port: int = 8000) -> tuple[bool, dict]:
     """Metric 2: App starts and responds to requests.
 
     Uses template-specific start/stop scripts in cli/eval/<template>/.
@@ -265,7 +265,7 @@ def check_runtime_success(app_dir: Path, container_name: str, template: str = "u
     print("  [2/7] Checking runtime success...")
 
     # Clean up any existing processes/containers before starting
-    _stop_app(app_dir, template)
+    _stop_app(app_dir, template, port)
 
     dockerfile = app_dir / "Dockerfile"
 
@@ -289,7 +289,7 @@ def check_runtime_success(app_dir: Path, container_name: str, template: str = "u
             return False, {}
 
         # Prepare environment variables
-        env = _prepare_runtime_env(app_dir, container_name)
+        env = _prepare_runtime_env(app_dir, container_name, port)
         if not env.get("DATABRICKS_HOST") or not env.get("DATABRICKS_TOKEN"):
             print(f"  ⚠️  Missing DATABRICKS_HOST or DATABRICKS_TOKEN")
             return False, {}
@@ -305,7 +305,7 @@ def check_runtime_success(app_dir: Path, container_name: str, template: str = "u
         startup_time = time.time() - start_time
 
         # Cleanup regardless of success/failure
-        _stop_app(app_dir, template)
+        _stop_app(app_dir, template, port)
 
         if success:
             return True, {"startup_time_sec": round(startup_time, 1)}
@@ -324,7 +324,7 @@ def check_runtime_success(app_dir: Path, container_name: str, template: str = "u
         return False, {}
 
 
-def _stop_app(app_dir: Path, template: str = "unknown") -> bool:
+def _stop_app(app_dir: Path, template: str = "unknown", port: int = 8000) -> bool:
     """Stop app using template-specific stop.sh script."""
     try:
         # Determine which template script to use
@@ -353,7 +353,7 @@ def _stop_app(app_dir: Path, template: str = "unknown") -> bool:
 
         # Fallback to manual cleanup
         subprocess.run(
-            ["bash", "-c", "lsof -ti:8000 | xargs kill -9 2>/dev/null || true"],
+            ["bash", "-c", f"lsof -ti:{port} | xargs kill -9 2>/dev/null || true"],
             capture_output=True,
             timeout=5,
         )
@@ -363,7 +363,7 @@ def _stop_app(app_dir: Path, template: str = "unknown") -> bool:
         # Fallback to manual cleanup
         try:
             subprocess.run(
-                ["bash", "-c", "lsof -ti:8000 | xargs kill -9 2>/dev/null || true"],
+                ["bash", "-c", f"lsof -ti:{port} | xargs kill -9 2>/dev/null || true"],
                 capture_output=True,
                 timeout=5,
             )
@@ -515,10 +515,10 @@ def check_tests_pass(app_dir: Path, template: str = "unknown") -> tuple[bool, fl
     return success, coverage_pct, has_tests
 
 
-def check_databricks_connectivity(app_dir: Path, template: str = "trpc") -> bool:
+def check_databricks_connectivity(app_dir: Path, template: str = "trpc", port: int = 8000) -> bool:
     """Metric 5: Can connect to Databricks and execute queries."""
     print("  [5/7] Checking Databricks connectivity...")
-    return _check_db_connectivity(app_dir, 8000, run_command, template)
+    return _check_db_connectivity(app_dir, port, run_command, template)
 
 
 def check_data_validity_llm(app_dir: Path, prompt: str | None, template: str = "trpc") -> tuple[bool, str]:
@@ -811,8 +811,14 @@ def check_deployability(app_dir: Path) -> tuple[int, list[str]]:
     return score, details
 
 
-def evaluate_app(app_dir: Path, prompt: str | None = None) -> EvalResult:
-    """Run full evaluation on an app."""
+def evaluate_app(app_dir: Path, prompt: str | None = None, port: int = 8000) -> EvalResult:
+    """Run full evaluation on an app.
+
+    Args:
+        app_dir: Path to the app directory
+        prompt: Optional prompt used to generate the app
+        port: Port to use for Docker containers (default: 8000)
+    """
     print(f"\nEvaluating: {app_dir.name}")
     print("=" * 60)
 
@@ -844,7 +850,7 @@ def evaluate_app(app_dir: Path, prompt: str | None = None) -> EvalResult:
                 issues.append("Build failed (npm install)")
 
         # Metric 2: Runtime (always try, not just if build succeeded)
-        runtime_success, runtime_meta = check_runtime_success(app_dir, container_name, template)
+        runtime_success, runtime_meta = check_runtime_success(app_dir, container_name, template, port)
         metrics.runtime_success = runtime_success
         metrics.startup_time_sec = runtime_meta.get("startup_time_sec", 0.0)
         if not runtime_success:
@@ -877,7 +883,7 @@ def evaluate_app(app_dir: Path, prompt: str | None = None) -> EvalResult:
 
         # Metric 5: Databricks connectivity (only if runtime succeeded)
         if runtime_success:
-            db_success = check_databricks_connectivity(app_dir, template)
+            db_success = check_databricks_connectivity(app_dir, template, port)
             metrics.databricks_connectivity = db_success
             if not db_success:
                 issues.append("Databricks connectivity failed")

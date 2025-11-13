@@ -39,6 +39,9 @@ if [ -z "$DATABRICKS_HOST" ] || [ -z "$DATABRICKS_TOKEN" ]; then
     exit 1
 fi
 
+# Set default port if not provided
+DATABRICKS_APP_PORT="${DATABRICKS_APP_PORT:-8000}"
+
 # Verify package.json exists
 if [ ! -f "package.json" ]; then
     echo "❌ Error: No package.json found in root directory" >&2
@@ -61,13 +64,13 @@ fi
 # Health check with retries (3 attempts, 2s timeout each, 1s apart)
 for i in {1..3}; do
     # Try healthcheck endpoint first
-    if curl -f -s --max-time 2 http://localhost:8000/healthcheck >/dev/null 2>&1; then
+    if curl -f -s --max-time 2 http://localhost:${DATABRICKS_APP_PORT}/healthcheck >/dev/null 2>&1; then
         echo "✅ App ready (healthcheck)" >&2
         exit 0
     fi
 
     # Fallback to root endpoint for npm apps
-    if curl -f -s --max-time 2 http://localhost:8000/ >/dev/null 2>&1; then
+    if curl -f -s --max-time 2 http://localhost:${DATABRICKS_APP_PORT}/ >/dev/null 2>&1; then
         echo "✅ App ready (root)" >&2
         exit 0
     fi
