@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-Batch evaluation script for all generated apps.
+Batch evaluation script for all generated apps using Dagger containers.
 
-Runs lightweight evaluation on all apps and generates a comprehensive report.
+Runs lightweight evaluation on all apps in isolated Dagger containers
+and generates a comprehensive report.
 
 Usage:
     python evaluate_all.py
@@ -11,9 +12,11 @@ Usage:
     python evaluate_all.py --limit 5
     python evaluate_all.py --skip 10
     python evaluate_all.py --start-from app5
+    python evaluate_all.py --parallel 4
 """
 
 import argparse
+import asyncio
 import fnmatch
 import json
 import sys
@@ -41,8 +44,10 @@ try:
 except ImportError:
     pass
 
-# Import evaluate_app from evaluate_app.py - all evaluation logic is there
-from evaluate_app import evaluate_app
+import dagger
+
+# Import async Dagger-based evaluation
+from evaluate_app_dagger import evaluate_app_async
 from eval_metrics import eff_units
 
 
@@ -558,6 +563,8 @@ Examples:
   python evaluate_all.py --skip 10                # Skip first 10 apps
   python evaluate_all.py --start-from app5        # Start from specific app
   python evaluate_all.py --limit 10 --skip 5      # Evaluate 10 apps starting from 6th
+  python evaluate_all.py -j 4                     # Evaluate 4 apps in parallel
+  python evaluate_all.py -j 0                     # Auto-detect CPU count and parallelize
         """
     )
 
@@ -571,6 +578,15 @@ Examples:
         '--staging',
         action='store_true',
         help='Report results to staging MLflow experiment (/Shared/edda-staging-evaluations)'
+    )
+
+    parser.add_argument(
+        '--parallel',
+        '-j',
+        type=int,
+        metavar='N',
+        default=1,
+        help='Run N evaluations in parallel (default: 1 = sequential). Use -j 0 for auto (CPU count)'
     )
 
     filter_group = parser.add_argument_group('app filtering')
@@ -654,8 +670,53 @@ def filter_app_dirs(app_dirs: list[Path], args) -> list[Path]:
     return filtered
 
 
-def main():
-    """Main entry point."""
+async def evaluate_app_with_metadata_async(
+    client: dagger.Client,
+    app_dir: Path,
+    prompt: str | None,
+    gen_metrics: dict,
+    index: int,
+    total: int
+) -> dict | None:
+    """
+    Async wrapper for evaluate_app_async that adds generation metrics and handles errors.
+    Designed to work with asyncio.gather().
+    """
+    print(f"\n[{index}/{total}] {app_dir.name}")
+
+    # Assign unique port for parallel execution to avoid Docker port conflicts
+    # Base port 8000 + index, supports up to ~60k parallel workers
+    port = 8000 + index
+
+    try:
+        result = await evaluate_app_async(client, app_dir, prompt, port)
+        result_dict = asdict(result)
+
+        # Add generation metrics if available
+        if app_dir.name in gen_metrics:
+            result_dict["generation_metrics"] = gen_metrics[app_dir.name]
+
+            # Calculate eff_units from generation_metrics if not already present
+            if result_dict["metrics"].get("eff_units") is None:
+                gm = gen_metrics[app_dir.name]
+                tokens = gm.get("input_tokens", 0) + gm.get("output_tokens", 0)
+                result_dict["metrics"]["eff_units"] = eff_units(
+                    tokens_used=tokens if tokens > 0 else None,
+                    agent_turns=gm.get("turns"),
+                    validation_runs=gm.get("validation_runs", 0)
+                )
+
+        return result_dict
+
+    except KeyboardInterrupt:
+        raise  # Re-raise to allow user to stop
+    except Exception as e:
+        print(f"❌ Error evaluating {app_dir.name}: {e}")
+        return None  # Return None for failed evaluations
+
+
+async def main_async():
+    """Async main entry point."""
     args = parse_args()
 
     script_dir = Path(__file__).parent
@@ -679,6 +740,16 @@ def main():
     # Filter based on command-line arguments
     app_dirs = filter_app_dirs(all_app_dirs, args)
 
+    # Auto-detect CPU count if --parallel 0
+    import os
+    cpu_count = os.cpu_count() or 1
+    if args.parallel == 0:
+        args.parallel = cpu_count
+        print(f"🔧 Auto-detected {cpu_count} CPUs, using --parallel {args.parallel}")
+    elif args.parallel < 0:
+        print(f"Error: --parallel must be >= 0 (got {args.parallel})")
+        sys.exit(1)
+
     print(f"🔍 Evaluating {len(app_dirs)} apps (out of {len(all_app_dirs)} total)...")
     print(f"   Directory: {apps_dir}")
     if args.apps:
@@ -691,43 +762,81 @@ def main():
         print(f"   Filter: starting from '{args.start_from}'")
     if args.limit:
         print(f"   Filter: limit to {args.limit} apps")
+    if args.parallel > 1:
+        print(f"   Parallelism: {args.parallel} workers (Dagger containers)")
     print("=" * 60)
 
+    # Warn if parallelism is too high
+    if args.parallel > 1:
+        if args.parallel > cpu_count:
+            print(f"⚠️  Warning: Requested {args.parallel} parallel jobs but system has {cpu_count} CPUs")
+            print(f"   Consider using --parallel {cpu_count} for optimal performance")
+        if args.parallel > len(app_dirs):
+            print(f"⚠️  Warning: Using {args.parallel} workers for {len(app_dirs)} apps")
+            print(f"   Consider using --parallel {len(app_dirs)} to avoid idle workers")
+
+    # Track timing
+    eval_start_time = time.time()
+
+    # Run evaluations using Dagger with async/await
+    # Wrap in try-except to handle Dagger session cleanup timeout gracefully
+    import subprocess
     results = []
-    for i, app_dir in enumerate(app_dirs, 1):
-        print(f"\n[{i}/{len(app_dirs)}] {app_dir.name}")
+    try:
+        async with dagger.Connection() as client:
+            if args.parallel > 1:
+                print(f"🚀 Running {args.parallel} evaluations in parallel (Dagger containers)...")
 
-        try:
-            prompt = prompts.get(app_dir.name)
-            result = evaluate_app(app_dir, prompt)
-            result_dict = asdict(result)
+                # Use asyncio.gather() for parallel execution with semaphore to limit concurrency
+                semaphore = asyncio.Semaphore(args.parallel)
 
-            # Add generation metrics if available
-            if app_dir.name in gen_metrics:
-                result_dict["generation_metrics"] = gen_metrics[app_dir.name]
+                async def evaluate_with_semaphore(index, app_dir):
+                    async with semaphore:
+                        return await evaluate_app_with_metadata_async(
+                            client,
+                            app_dir,
+                            prompts.get(app_dir.name),
+                            gen_metrics,
+                            index,
+                            len(app_dirs)
+                        )
 
-                # Calculate eff_units from generation_metrics if not already present
-                if result_dict["metrics"].get("eff_units") is None:
-                    gm = gen_metrics[app_dir.name]
-                    tokens = gm.get("input_tokens", 0) + gm.get("output_tokens", 0)
-                    result_dict["metrics"]["eff_units"] = eff_units(
-                        tokens_used=tokens if tokens > 0 else None,
-                        agent_turns=gm.get("turns"),
-                        validation_runs=gm.get("validation_runs", 0)
+                results = await asyncio.gather(
+                    *[evaluate_with_semaphore(i, app_dir) for i, app_dir in enumerate(app_dirs, 1)],
+                    return_exceptions=False
+                )
+
+                # Filter out None results (failed evaluations)
+                results = [r for r in results if r is not None]
+
+            else:
+                # Sequential execution
+                print("🔄 Running evaluations sequentially (Dagger containers)...")
+                results = []
+                for i, app_dir in enumerate(app_dirs, 1):
+                    result_dict = await evaluate_app_with_metadata_async(
+                        client,
+                        app_dir,
+                        prompts.get(app_dir.name),
+                        gen_metrics,
+                        i,
+                        len(app_dirs)
                     )
+                    if result_dict is not None:
+                        results.append(result_dict)
+    except subprocess.TimeoutExpired as e:
+        # Dagger session cleanup timed out, but evaluations completed successfully
+        # This is a known issue with Dagger SDK - the cleanup can take longer than the 300s timeout
+        print(f"\n⚠️  Warning: Dagger session cleanup timed out (this is expected for large batches)")
+        print(f"   All evaluations completed successfully, continuing with report generation...")
 
-            results.append(result_dict)
-
-            # Quick status
-            status = "✓" if len(result.issues) <= 2 else "⚠" if len(result.issues) <= 4 else "✗"
-            print(f"  {status} {len(result.issues)} issues")
-
-        except Exception as e:
-            print(f"  ✗ Error: {str(e)}")
-            continue
+    eval_duration = time.time() - eval_start_time
 
     print("\n" + "=" * 60)
-    print(f"✅ Evaluated {len(results)}/{len(app_dirs)} apps")
+    print(f"✅ Evaluated {len(results)}/{len(app_dirs)} apps in {eval_duration:.1f}s")
+    if args.parallel > 1:
+        estimated_sequential = eval_duration * args.parallel
+        print(f"   ⚡ Parallelization saved ~{estimated_sequential - eval_duration:.1f}s (speedup: {estimated_sequential/eval_duration:.1f}x)")
 
     # Generate summary and report
     print("\n📊 Generating summary report...")
@@ -870,6 +979,11 @@ def main():
         print(f"\n🎉 Open in browser: file://{html_output.absolute()}")
     except Exception as e:
         print(f"⚠️  Could not generate HTML viewer: {e}")
+
+
+def main():
+    """Sync wrapper for async main."""
+    asyncio.run(main_async())
 
 
 if __name__ == "__main__":

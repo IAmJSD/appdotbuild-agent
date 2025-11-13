@@ -66,7 +66,7 @@ ENV_VARS+=("-e" "DATABRICKS_APP_PORT=${DATABRICKS_APP_PORT}")
 ENV_VARS+=("-e" "FLASK_RUN_HOST=${FLASK_RUN_HOST}")
 
 # Run the container
-docker run -d -p 8000:8000 \
+docker run -d -p ${DATABRICKS_APP_PORT}:8000 \
     --name "${CONTAINER_NAME}" \
     ${ENV_FILE_ARGS} \
     "${ENV_VARS[@]}" \
@@ -84,7 +84,7 @@ fi
 # Health check with retries (3 attempts, 2s timeout each, 1s apart)
 # Docker apps should have proper /healthcheck endpoint
 for i in {1..3}; do
-    if curl -f -s --max-time 2 http://localhost:8000/healthcheck >/dev/null 2>&1; then
+    if curl -f -s --max-time 2 http://localhost:${DATABRICKS_APP_PORT}/healthcheck >/dev/null 2>&1; then
         echo "✅ App ready (healthcheck)" >&2
         exit 0
     fi
