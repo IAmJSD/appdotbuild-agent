@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import json
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -135,7 +136,9 @@ class LiteLLMAgent:
                     total_output_tokens += response.usage.completion_tokens or 0  # type: ignore[attr-defined]
 
                 if hasattr(response, "_hidden_params") and "response_cost" in response._hidden_params:  # type: ignore[attr-defined]
-                    total_cost += response._hidden_params["response_cost"]  # type: ignore[attr-defined]
+                    cost = response._hidden_params["response_cost"]  # type: ignore[attr-defined]
+                    if cost is not None:
+                        total_cost += cost
 
                 choice = response.choices[0]  # type: ignore[attr-defined]
                 message = choice.message  # type: ignore[attr-defined]
@@ -150,7 +153,10 @@ class LiteLLMAgent:
 
                     # log each tool call via tracker
                     for tc in message.tool_calls:
-                        args = tc.function.arguments if isinstance(tc.function.arguments, dict) else {}
+                        if isinstance(tc.function.arguments, str):
+                            args = json.loads(tc.function.arguments)
+                        else:
+                            args = tc.function.arguments
                         self.tracker.log_tool_call(tc.function.name or "unknown", args, tc.id)
 
                     self.messages.append(
@@ -204,8 +210,6 @@ class LiteLLMAgent:
         for tc in tool_calls:
             tool_name = tc.function.name
             if isinstance(tc.function.arguments, str):
-                import json
-
                 arguments = json.loads(tc.function.arguments)
             else:
                 arguments = tc.function.arguments
@@ -341,7 +345,10 @@ Be concise and to the point."""
 def cli(
     prompt: str,
     app_name: str | None = None,
-    model: str = "openrouter/minimax/minimax-m2",  # other good options: "openrouter/moonshotai/kimi-k2-thinking",  "gemini/gemini-2.5-pro"
+    model: str = "openrouter/minimax/minimax-m2",  # other good options: "openrouter/moonshotai/kimi-k2-thinking",  "gemini/gemini-2.5-pro",
+    # some open-weights platform provide openai/anthropic-like API that can be used like 
+    # OPENAI_API_BASE="https://api.minimax.io/v1" OPENAI_API_KEY="$MINIMAX_API_KEY" uv run cli/single_run.py "..."" --backend=litellm --model="openai/MiniMax-M2"
+    # ANTHROPIC_BASE_URL="https://api.minimax.io/anthropic" ANTHROPIC_API_KEY="$MINIMAX_API_KEY" uv run cli/single_run.py "..." --backend=litellm --model="anthropic/MiniMax-M2"
     suppress_logs: bool = False,
     mcp_binary: str | None = None,
 ):
