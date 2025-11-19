@@ -350,17 +350,6 @@ Be concise and to the point."""
             user_prompt = f"App name: {self.app_name}\nApp directory: {app_dir}\n\nTask: {prompt}"
             metrics = await agent.run(user_prompt)
 
-            # save trajectory via tracker
-            await agent.tracker.save(
-                prompt=prompt,
-                cost_usd=metrics.cost_usd,
-                total_tokens=metrics.input_tokens + metrics.output_tokens,
-                turns=metrics.turns,
-                backend="litellm",
-                model=self.model,
-                app_dir=metrics.app_dir,
-            )
-
             if not self.suppress_logs:
                 logger.info(f"\n{'=' * 80}")
                 logger.info(f"Cost: ${metrics.cost_usd:.4f}")
@@ -372,6 +361,16 @@ Be concise and to the point."""
 
             return metrics
         finally:
+            # save trajectory via tracker
+            await agent.tracker.save(
+                prompt=prompt,
+                cost_usd=metrics.cost_usd,
+                total_tokens=metrics.input_tokens + metrics.output_tokens,
+                turns=metrics.turns,
+                backend="litellm",
+                model=self.model,
+                app_dir=metrics.app_dir,
+            )
             # explicitly cleanup to avoid asyncio context issues with multiprocessing
             try:
                 await mcp_session.__aexit__(None, None, None)

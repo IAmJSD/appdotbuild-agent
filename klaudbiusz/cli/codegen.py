@@ -216,18 +216,17 @@ Use up to 10 tools per call to speed up the process.\n"""
                 print(f"\n❌ Error: {e}", file=sys.stderr)
             raise
         finally:
+            # save trajectory via tracker
+            await self.tracker.save(
+                prompt=prompt,
+                cost_usd=metrics["cost_usd"],
+                total_tokens=metrics["input_tokens"] + metrics["output_tokens"],
+                turns=metrics["turns"],
+                backend="claude",
+                model="claude-sonnet-4-5-20250929",
+                app_dir=self.scaffold_tracker.app_dir,
+            )
             await self.tracker.close()
-
-        # save trajectory via tracker
-        await self.tracker.save(
-            prompt=prompt,
-            cost_usd=metrics["cost_usd"],
-            total_tokens=metrics["input_tokens"] + metrics["output_tokens"],
-            turns=metrics["turns"],
-            backend="claude",
-            model="claude-sonnet-4-5-20250929",
-            app_dir=self.scaffold_tracker.app_dir,
-        )
 
         # Save generation_metrics.json to app directory for evaluation
         if self.scaffold_tracker.app_dir:
@@ -239,8 +238,6 @@ Use up to 10 tools per call to speed up the process.\n"""
                 "output_tokens": metrics["output_tokens"],
                 "turns": metrics["turns"],
             }, indent=2))
-
-        return metrics
 
     async def _log_tool_use(self, block: ToolUseBlock, truncate) -> None:
         input_dict = block.input or {}
