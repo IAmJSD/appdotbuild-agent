@@ -20,7 +20,7 @@ async fn smoke_test_mcp_server() -> Result<()> {
     // create provider (no need to try other providers for smoke test)
     let session_ctx = SessionContext::new(None);
     let config = Config::default();
-    let provider = CombinedProvider::new(session_ctx, None, None, None, Some(io), None, &config)?;
+    let provider = CombinedProvider::new(session_ctx, None, None, None, None, Some(io), None, &config)?;
 
     // create in-process service
     let tokio_in_process = TokioInProcess::new(provider).await?;

@@ -244,7 +244,7 @@ mod tests {
         let config = Config {
             with_deployment: true,
             with_workspace_tools: false,
-            required_providers: vec![ProviderType::Databricks, ProviderType::Io],
+            required_providers: vec![ProviderType::DatabricksCli, ProviderType::Io],
             io_config: Some(IoConfig {
                 template: TemplateConfig::Trpc,
                 validation: None,

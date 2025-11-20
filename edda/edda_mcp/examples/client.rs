@@ -9,7 +9,7 @@
 
 use edda_mcp::config::Config;
 use edda_mcp::providers::{
-    CombinedProvider, DatabricksProvider, DeploymentProvider, GoogleSheetsProvider, IOProvider,
+    CombinedProvider, DatabricksRestProvider, DeploymentProvider, GoogleSheetsProvider, IOProvider,
 };
 use edda_mcp::session::SessionContext;
 use eyre::Result;
@@ -27,7 +27,7 @@ async fn main() -> Result<()> {
     println!("Starting edda-mcp server in-process...");
 
     // initialize providers
-    let databricks = DatabricksProvider::new().ok();
+    let databricks = DatabricksRestProvider::new().ok();
     let deployment = DeploymentProvider::new().ok();
     let google_sheets = GoogleSheetsProvider::new().await.ok();
     let io = IOProvider::new(None).ok();
@@ -35,7 +35,7 @@ async fn main() -> Result<()> {
     let session_ctx = SessionContext::new(None);
     let config = Config::default();
     let provider =
-        CombinedProvider::new(session_ctx, databricks, deployment, google_sheets, io, None, &config).map_err(|_| {
+        CombinedProvider::new(session_ctx, databricks, None, deployment, google_sheets, io, None, &config).map_err(|_| {
             eyre::eyre!(
                 "No integrations available. Configure at least one:\n\
              - Databricks: Set DATABRICKS_HOST and DATABRICKS_TOKEN\n\
