@@ -38,7 +38,7 @@ pub enum ProviderType {
 }
 
 enum TargetProvider {
-    Databricks(Arc<DatabricksRestProvider>),
+    DatabricksRest(Arc<DatabricksRestProvider>),
     DatabricksCli(Arc<DatabricksCliProvider>),
     Deployment(Arc<DeploymentProvider>),
     GoogleSheets(Arc<GoogleSheetsProvider>),
@@ -118,7 +118,7 @@ impl CombinedProvider {
                     None,
                 )
             })?;
-            return Ok(TargetProvider::Databricks(provider));
+            return Ok(TargetProvider::DatabricksRest(provider));
         }
 
         if tool_name == "run_databricks_cli" {
@@ -171,7 +171,7 @@ impl CombinedProvider {
 
         let mut configured = Vec::new();
         if let Some(provider) = &self.databricks {
-            configured.push(TargetProvider::Databricks(Arc::clone(provider)));
+            configured.push(TargetProvider::DatabricksRest(Arc::clone(provider)));
         }
         if let Some(provider) = &self.deployment {
             configured.push(TargetProvider::Deployment(Arc::clone(provider)));
@@ -371,7 +371,7 @@ impl ServerHandler for CombinedProvider {
         }
 
         let mut result = match self.resolve_provider(&params.name)? {
-            TargetProvider::Databricks(provider) => provider.call_tool(params, context).await,
+            TargetProvider::DatabricksRest(provider) => provider.call_tool(params, context).await,
             TargetProvider::DatabricksCli(provider) => provider.call_tool(params, context).await,
             TargetProvider::Deployment(provider) => provider.call_tool(params, context).await,
             TargetProvider::GoogleSheets(provider) => provider.call_tool(params, context).await,
