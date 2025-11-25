@@ -64,7 +64,7 @@ class ClaudeAppBuilder:
         output_dir: str | None = None,
     ):
         load_dotenv()
-        self.project_root = Path(__file__).parent.parent.parent
+        self.project_root = Path(__file__).parent.parent.parent.parent
         self.mcp_manifest = validate_mcp_manifest(mcp_binary, self.project_root)
 
         self.wipe_db = wipe_db

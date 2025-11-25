@@ -34,7 +34,7 @@ class MCPSession:
     def __init__(self, mcp_binary: str | None = None, mcp_json_path: str | None = None):
         self.mcp_binary = mcp_binary
         self.mcp_json_path = mcp_json_path
-        self.project_root = Path(__file__).parent.parent.parent
+        self.project_root = Path(__file__).parent.parent.parent.parent
         self.mcp_manifest = validate_mcp_manifest(mcp_binary, self.project_root)
 
         self._context = None

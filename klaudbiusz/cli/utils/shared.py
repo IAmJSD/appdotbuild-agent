@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from trajectory import Message, ToolCall, ToolResult, Trajectory, init_trajectory_db, save_trajectory
+from cli.trajectory import Message, ToolCall, ToolResult, Trajectory, init_trajectory_db, save_trajectory
 
 if TYPE_CHECKING:
     from asyncpg import Pool
