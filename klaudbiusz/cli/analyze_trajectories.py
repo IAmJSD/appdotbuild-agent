@@ -168,6 +168,9 @@ def get_mcp_tools_description(mcp_binary: str | None, project_root: Path, mcp_js
         )
         + "\n"
     )
+    assert proc.stdin is not None
+    assert proc.stdout is not None
+
     proc.stdin.write(init_request.encode())
     proc.stdin.flush()
 
@@ -345,6 +348,7 @@ Analyze the data and provide your recommendations."""
         system_prompt=base_instructions,
         permission_mode="bypassPermissions",
         disallowed_tools=disallowed_tools,
+        model="claude-opus-4-5",
         allowed_tools=[
             "Read",
             "Glob",
