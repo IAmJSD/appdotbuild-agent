@@ -249,6 +249,7 @@ examples:
         type=int,
         metavar="N",
         help="filter sessions from last N days",
+        default=3,
     )
     parser.add_argument(
         "--project",
