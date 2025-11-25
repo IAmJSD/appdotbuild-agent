@@ -46,7 +46,6 @@ def run_single_generation(
     backend: str,
     model: str | None,
     wipe_db: bool = False,
-    use_subagents: bool = False,
     suppress_logs: bool = True,
     mcp_binary: str | None = None,
     mcp_json: str | None = None,
@@ -70,7 +69,6 @@ def run_single_generation(
                     app_name=app_name,
                     wipe_db=wipe_db,
                     suppress_logs=suppress_logs,
-                    use_subagents=use_subagents,
                     mcp_binary=mcp_binary,
                     mcp_json_path=mcp_json,
                     output_dir=output_dir,
@@ -147,7 +145,6 @@ def main(
     model: str | None = None,
     wipe_db: bool = False,
     n_jobs: int = -1,
-    use_subagents: bool = False,
     mcp_binary: str | None = None,
     mcp_json: str | None = None,
     output_dir: str | None = None,
@@ -160,7 +157,6 @@ def main(
         model: LLM model (required if backend=litellm, e.g., "openrouter/minimax/minimax-m2")
         wipe_db: Whether to wipe database on start
         n_jobs: Number of parallel jobs (-1 for all cores)
-        use_subagents: Whether to enable subagent delegation (claude backend only)
         mcp_binary: Optional path to pre-built edda-mcp binary (default: use cargo run)
         mcp_json: Optional path to JSON config file for edda_mcp
         output_dir: Custom output directory for generated apps (default: ./app)
@@ -221,14 +217,13 @@ def main(
     print(f"Parallel jobs: {n_jobs}")
     if backend == "claude":
         print(f"Wipe DB: {wipe_db}")
-        print(f"Use subagents: {use_subagents}")
     print(f"MCP binary: {mcp_binary if mcp_binary else 'cargo run (default)'}")
     print(f"Output dir: {output_dir if output_dir else './app (default)'}\n")
 
     # generate all apps
     results: list[RunResult] = Parallel(n_jobs=n_jobs, backend="loky", verbose=10)(  # type: ignore[assignment]
         delayed(run_single_generation)(
-            app_name, prompt, backend, model, wipe_db, use_subagents, suppress_logs, mcp_binary, mcp_json, output_dir
+            app_name, prompt, backend, model, wipe_db, suppress_logs, mcp_binary, mcp_json, output_dir
         )
         for app_name, prompt in selected_prompts.items()
     )

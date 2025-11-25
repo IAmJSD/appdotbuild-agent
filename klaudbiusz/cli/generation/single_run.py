@@ -15,7 +15,6 @@ def run(
     backend: str = "claude",
     model: str | None = None,
     wipe_db: bool = True,
-    use_subagents: bool = False,
     mcp_binary: str | None = None,
     mcp_json: str | None = None,
 ):
@@ -27,13 +26,11 @@ def run(
         backend: Backend to use ("claude" or "litellm", default: "claude")
         model: LLM model (required if backend=litellm, e.g., "openrouter/minimax/minimax-m2")
         wipe_db: Whether to wipe database on start
-        use_subagents: Whether to enable subagent delegation (claude backend only)
         mcp_binary: Optional path to pre-built edda-mcp binary (default: use cargo run)
         mcp_json: Optional path to JSON config file for edda_mcp
 
     Usage:
         # Claude backend (default)
-        python main.py "build dashboard" --use_subagents
         python main.py "build dashboard" --app_name=my-dashboard
 
         # LiteLLM backend
@@ -55,7 +52,6 @@ def run(
                 app_name=app_name,
                 wipe_db=wipe_db,
                 suppress_logs=suppress_logs,
-                use_subagents=use_subagents,
                 mcp_binary=mcp_binary,
                 mcp_json_path=mcp_json,
             )

@@ -20,6 +20,7 @@ from claude_agent_sdk import (
     query,
 )
 from dotenv import load_dotenv
+
 from cli.utils.shared import build_mcp_command, validate_mcp_manifest
 
 logger = logging.getLogger(__name__)
@@ -348,6 +349,7 @@ Analyze the data and provide your recommendations."""
         system_prompt=base_instructions,
         permission_mode="bypassPermissions",
         disallowed_tools=disallowed_tools,
+        model="claude-opus-4-5",
         allowed_tools=[
             "Read",
             "Glob",
