@@ -18,6 +18,7 @@ from claude_agent_sdk import (
     query,
 )
 from dotenv import load_dotenv
+
 from cli.utils.shared import ScaffoldTracker, Tracker, build_mcp_command, setup_logging, validate_mcp_manifest
 
 try:
@@ -85,7 +86,7 @@ class ClaudeAppBuilder:
         agents = {}
 
         # workflow and template best practices are now in the MCP tool description
-        base_instructions = """Use Edda MCP tools to scaffold, build, and test the app as needed.
+        base_instructions = """Use MCP tools to scaffold, build, and test the app as needed.
 Use data from Databricks when relevant.
 Be concise and to the point in your responses.
 Use up to 10 tools per call to speed up the process.
