@@ -155,7 +155,7 @@ def main(
     """Bulk app generation from predefined prompt sets.
 
     Args:
-        prompts: Prompt set to use ("databricks" or "test", default: "databricks")
+        prompts: Prompt set to use ("databricks", "databricks_v2", or "test", default: "databricks")
         backend: Backend to use ("claude" or "litellm", default: "claude")
         model: LLM model (required if backend=litellm, e.g., "openrouter/minimax/minimax-m2")
         wipe_db: Whether to wipe database on start
@@ -168,6 +168,9 @@ def main(
     Usage:
         # Claude backend (default) with databricks prompts (default)
         python bulk_run.py
+
+        # Claude backend with databricks_v2 prompts
+        python bulk_run.py --prompts=databricks_v2
 
         # Claude backend with test prompts
         python bulk_run.py --prompts=test
@@ -195,10 +198,12 @@ def main(
     match prompts:
         case "databricks":
             from cli.generation.prompts.databricks import PROMPTS as selected_prompts
+        case "databricks_v2":
+            from cli.generation.prompts.databricks_v2 import PROMPTS as selected_prompts
         case "test":
             from cli.generation.prompts.web import PROMPTS as selected_prompts
         case _:
-            raise ValueError(f"Unknown prompt set: {prompts}. Use 'databricks' or 'test'")
+            raise ValueError(f"Unknown prompt set: {prompts}. Use 'databricks', 'databricks_v2', or 'test'")
 
     # validate backend-specific requirements
     if backend == "litellm" and not model:
