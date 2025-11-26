@@ -53,7 +53,7 @@ async def create_ts_workspace(
     )
 
     # Copy all eval scripts into container
-    eval_dir = Path(__file__).parent / "eval" / template
+    eval_dir = Path(__file__).parent.parent / "eval" / template
 
     # Copy all .sh files from eval directory
     if eval_dir.exists():

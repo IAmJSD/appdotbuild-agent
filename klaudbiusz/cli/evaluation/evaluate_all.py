@@ -34,7 +34,7 @@ from cli.evaluation.evaluate_app_dagger import evaluate_app_async
 
 # Load environment variables from .env file
 env_paths = [
-    Path(__file__).parent.parent.parent / "edda" / ".env",
+    Path(__file__).parent.parent.parent.parent / "edda" / ".env",
     Path(__file__).parent.parent / ".env",
 ]
 for env_path in env_paths:

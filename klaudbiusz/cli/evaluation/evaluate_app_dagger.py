@@ -45,7 +45,7 @@ if str(agent_path) not in sys.path:
 
 # Load environment variables
 env_paths = [
-    Path(__file__).parent.parent.parent / "edda" / ".env",
+    Path(__file__).parent.parent.parent.parent / "edda" / ".env",
     Path(__file__).parent.parent / ".env",
     Path(__file__).parent / ".env",
 ]

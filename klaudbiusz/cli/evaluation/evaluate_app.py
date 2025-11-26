@@ -35,7 +35,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 # Load environment variables from .env file - try multiple locations
 env_paths = [
-    Path(__file__).parent.parent.parent / "edda" / ".env",
+    Path(__file__).parent.parent.parent.parent / "edda" / ".env",
     Path(__file__).parent.parent / ".env",
     Path(__file__).parent / ".env",
 ]
