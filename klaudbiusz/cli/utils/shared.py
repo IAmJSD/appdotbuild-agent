@@ -307,6 +307,7 @@ def build_mcp_command(
     mcp_binary: str | None,
     mcp_manifest: Path | None,
     mcp_json_path: str | None = None,
+    mcp_args: list[str] | None = None,
 ) -> tuple[str, list[str]]:
     """Build MCP server command and arguments.
 
@@ -314,6 +315,8 @@ def build_mcp_command(
         mcp_binary: Optional path to edda_mcp binary
         mcp_manifest: Path to Cargo.toml (if using cargo run)
         mcp_json_path: Optional path to JSON config file
+        mcp_args: Optional list of extra arguments to pass to the MCP server.
+                  When provided, replaces the default args (--with-deployment=false or --json).
 
     Returns:
         Tuple of (command, args)
@@ -327,8 +330,11 @@ def build_mcp_command(
         base_args = ["run", "--manifest-path", str(mcp_manifest), "--"]
         command = "cargo"
 
-    # If JSON config file provided, read and pass via --json flag
-    if mcp_json_path:
+    # custom args override default behavior
+    if mcp_args is not None:
+        args = base_args + mcp_args
+    elif mcp_json_path:
+        # JSON config file provided, read and pass via --json flag
         with open(mcp_json_path) as f:
             config_json = json.dumps(json.load(f))
         args = base_args + ["--json", config_json]

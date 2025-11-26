@@ -17,6 +17,7 @@ def run(
     wipe_db: bool = True,
     mcp_binary: str | None = None,
     mcp_json: str | None = None,
+    mcp_args: list[str] | None = None,
 ):
     """Run app builder with given prompt.
 
@@ -28,6 +29,7 @@ def run(
         wipe_db: Whether to wipe database on start
         mcp_binary: Optional path to pre-built edda-mcp binary (default: use cargo run)
         mcp_json: Optional path to JSON config file for edda_mcp
+        mcp_args: Optional list of args passed to the MCP server (overrides defaults)
 
     Usage:
         # Claude backend (default)
@@ -39,6 +41,9 @@ def run(
 
         # Custom MCP config
         python main.py "build dashboard" --mcp_json=./config/databricks-cli.json
+
+        # Custom MCP args
+        python main.py "build dashboard" --mcp_args='["experimental", "apps-mcp"]'
     """
     if app_name is None:
         app_name = f"app-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
@@ -54,6 +59,7 @@ def run(
                 suppress_logs=suppress_logs,
                 mcp_binary=mcp_binary,
                 mcp_json_path=mcp_json,
+                mcp_args=mcp_args,
             )
             metrics = builder.run(prompt, wipe_db=wipe_db)
         case "litellm":
@@ -64,6 +70,7 @@ def run(
                 model=model,
                 mcp_binary=mcp_binary,
                 mcp_json_path=mcp_json,
+                mcp_args=mcp_args,
                 suppress_logs=suppress_logs,
             )
             litellm_metrics = builder_litellm.run(prompt)

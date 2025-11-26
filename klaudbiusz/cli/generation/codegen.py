@@ -61,6 +61,7 @@ class ClaudeAppBuilder:
         suppress_logs: bool = False,
         mcp_binary: str | None = None,
         mcp_json_path: str | None = None,
+        mcp_args: list[str] | None = None,
         output_dir: str | None = None,
     ):
         load_dotenv()
@@ -73,6 +74,7 @@ class ClaudeAppBuilder:
         self.suppress_logs = suppress_logs
         self.mcp_binary = mcp_binary
         self.mcp_json_path = mcp_json_path
+        self.mcp_args = mcp_args
         self.output_dir = Path(output_dir) if output_dir else Path.cwd() / "app"
         self.tracker = Tracker(self.run_id, app_name, suppress_logs)
         self.scaffold_tracker = ScaffoldTracker()
@@ -90,6 +92,7 @@ class ClaudeAppBuilder:
 Use data from Databricks when relevant.
 Be concise and to the point in your responses.
 Use up to 10 tools per call to speed up the process.
+Never deploy the app, just scaffold and build it.
 """
 
         disallowed_tools = [
@@ -98,7 +101,8 @@ Use up to 10 tools per call to speed up the process.
             "WebFetch",
         ]
 
-        command, args = build_mcp_command(self.mcp_binary, self.mcp_manifest, self.mcp_json_path)
+        command, args = build_mcp_command(self.mcp_binary, self.mcp_manifest, self.mcp_json_path, self.mcp_args)
+
         mcp_config = {
             "type": "stdio",
             "command": command,

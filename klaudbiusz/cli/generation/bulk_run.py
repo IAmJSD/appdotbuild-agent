@@ -49,6 +49,7 @@ def run_single_generation(
     suppress_logs: bool = True,
     mcp_binary: str | None = None,
     mcp_json: str | None = None,
+    mcp_args: list[str] | None = None,
     output_dir: str | None = None,
 ) -> RunResult:
     # re-apply litellm patch in worker process (joblib uses spawn/fork)
@@ -71,6 +72,7 @@ def run_single_generation(
                     suppress_logs=suppress_logs,
                     mcp_binary=mcp_binary,
                     mcp_json_path=mcp_json,
+                    mcp_args=mcp_args,
                     output_dir=output_dir,
                 )
                 metrics = codegen.run(prompt, wipe_db=wipe_db)
@@ -83,6 +85,7 @@ def run_single_generation(
                     model=model,
                     mcp_binary=mcp_binary,
                     mcp_json_path=mcp_json,
+                    mcp_args=mcp_args,
                     suppress_logs=suppress_logs,
                     output_dir=output_dir,
                 )
@@ -147,6 +150,7 @@ def main(
     n_jobs: int = -1,
     mcp_binary: str | None = None,
     mcp_json: str | None = None,
+    mcp_args: list[str] | None = None,
     output_dir: str | None = None,
 ) -> None:
     """Bulk app generation from predefined prompt sets.
@@ -157,6 +161,7 @@ def main(
         model: LLM model (required if backend=litellm, e.g., "openrouter/minimax/minimax-m2")
         wipe_db: Whether to wipe database on start
         n_jobs: Number of parallel jobs (-1 for all cores)
+        mcp_args: Optional list of args passed to the MCP server (overrides defaults)
         mcp_binary: Optional path to pre-built edda-mcp binary (default: use cargo run)
         mcp_json: Optional path to JSON config file for edda_mcp
         output_dir: Custom output directory for generated apps (default: ./app)
@@ -223,7 +228,7 @@ def main(
     # generate all apps
     results: list[RunResult] = Parallel(n_jobs=n_jobs, backend="loky", verbose=10)(  # type: ignore[assignment]
         delayed(run_single_generation)(
-            app_name, prompt, backend, model, wipe_db, suppress_logs, mcp_binary, mcp_json, output_dir
+            app_name, prompt, backend, model, wipe_db, suppress_logs, mcp_binary, mcp_json, mcp_args, output_dir
         )
         for app_name, prompt in selected_prompts.items()
     )
