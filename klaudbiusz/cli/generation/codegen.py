@@ -165,6 +165,13 @@ Never deploy the app, just scaffold and build it.
                 print(f"\n❌ Error: {e}", file=sys.stderr)
             raise
         finally:
+            # fallback: detect app_dir from filesystem if not tracked
+            if not self.scaffold_tracker.app_dir:
+                detected = self.scaffold_tracker.detect_from_filesystem(self.output_dir)
+                if detected:
+                    self.scaffold_tracker.app_dir = detected
+                    logger.info(f"📁 Detected app directory from filesystem: {detected}")
+
             # save trajectory via tracker
             await self.tracker.save(
                 prompt=prompt,
@@ -225,13 +232,6 @@ Never deploy the app, just scaffold and build it.
                     await self._log_todo_update(block, truncate)
                 case ToolUseBlock(name="Task"):
                     await self._log_tool_use(block, truncate)
-                case ToolUseBlock(name="mcp__edda__invoke_databricks_cli"):
-                    await self._log_generic_tool(block, truncate)
-                    cli_cmd = block.input["command"]
-                    if "experimental apps-mcp tools init-template" in cli_cmd:
-                        *_, pwd_arg = cli_cmd.split(" ")
-                        self.scaffold_tracker.track(block.id, pwd_arg)
-                        logger.warning(f"Tracking scaffolded app directory: {pwd_arg}")
                 case ToolUseBlock(name="mcp__edda__scaffold_data_app"):
                     if block.input is not None and "work_dir" in block.input:
                         self.scaffold_tracker.track(block.id, block.input["work_dir"])
