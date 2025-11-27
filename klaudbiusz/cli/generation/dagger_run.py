@@ -137,15 +137,21 @@ class DaggerAppGenerator:
         # run generation
         result = container.with_exec(cmd)
 
-        # capture combined stdout/stderr as log
-        log_content = await result.stdout()
-        stderr_content = await result.stderr()
-        full_log = f"{log_content}\n\n=== STDERR ===\n{stderr_content}" if stderr_content else log_content
-
-        # save log to host
+        # prepare log file path
         log_file_local = self.output_dir / "logs" / f"{app_name}.log"
         log_file_local.parent.mkdir(parents=True, exist_ok=True)
-        log_file_local.write_text(full_log)
+
+        # capture stdout/stderr - even on failure we want to save what we can
+        try:
+            log_content = await result.stdout()
+            stderr_content = await result.stderr()
+            full_log = f"{log_content}\n\n=== STDERR ===\n{stderr_content}" if stderr_content else log_content
+            log_file_local.write_text(full_log)
+        except dagger.ExecError as e:
+            # container command failed - save error output as log
+            full_log = f"=== EXEC ERROR ===\n{e}\n\n=== STDOUT ===\n{e.stdout}\n\n=== STDERR ===\n{e.stderr}"
+            log_file_local.write_text(full_log)
+            raise
 
         # export app directory (if it exists)
         app_dir_local = self.output_dir / app_name

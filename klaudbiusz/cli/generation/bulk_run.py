@@ -27,7 +27,7 @@ def main(
     mcp_binary: str | None = None,
     mcp_args: list[str] | None = None,
     output_dir: str | None = None,
-    max_concurrency: int = 8,
+    max_concurrency: int = 6,
 ) -> None:
     """Bulk app generation via Dagger with parallelism.
 
