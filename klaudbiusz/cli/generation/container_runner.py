@@ -12,8 +12,10 @@ def run(
     backend: str = "claude",
     model: str | None = None,
     mcp_args: str | list[str] | None = None,
+    mcp_binary: str = "/usr/local/bin/edda_mcp",
+    output_dir: str = "/workspace",
 ) -> None:
-    """Run app generation inside container.
+    """Run app generation (inside container or locally for debugging).
 
     Args:
         prompt: The prompt describing what to build
@@ -21,6 +23,8 @@ def run(
         backend: "claude" or "litellm"
         model: Model name (required for litellm)
         mcp_args: JSON-encoded list or already-parsed list of MCP server args
+        mcp_binary: Path to edda_mcp binary (default: /usr/local/bin/edda_mcp for container)
+        output_dir: Output directory for generated app (default: /workspace for container)
     """
     # handle both JSON string and already-parsed list (fire may parse it)
     parsed_mcp_args: list[str] | None
@@ -40,9 +44,9 @@ def run(
                 app_name=app_name,
                 wipe_db=False,
                 suppress_logs=False,
-                mcp_binary="/usr/local/bin/edda_mcp",
+                mcp_binary=mcp_binary,
                 mcp_args=parsed_mcp_args,
-                output_dir="/workspace/app",
+                output_dir=output_dir,
             )
             metrics = builder.run(prompt, wipe_db=False)
         case "litellm":
@@ -55,10 +59,10 @@ def run(
             builder = LiteLLMAppBuilder(
                 app_name=app_name,
                 model=model,
-                mcp_binary="/usr/local/bin/edda_mcp",
+                mcp_binary=mcp_binary,
                 mcp_args=parsed_mcp_args,
                 suppress_logs=False,
-                output_dir="/workspace/app",
+                output_dir=output_dir,
             )
             metrics = builder.run(prompt)
         case _:

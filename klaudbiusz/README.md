@@ -21,42 +21,55 @@ cp .env.example .env
 ```
 
 ### Generate Applications
+
+Generation runs inside Dagger containers for isolation and reproducibility.
+
+**Prerequisites:**
+- Docker running
+- Linux build of edda_mcp binary (for Dagger containers)
+- Databricks CLI OAuth configured (`~/.databrickscfg` + `~/.databricks/token-cache.json`)
+
 ```bash
 cd klaudbiusz
-
 
 # make sure app folder is empty
 cli/archive_evaluation.sh
 cli/cleanup_evaluation.sh
 
-# Generate a single app (Claude backend, default)
-uv run cli/generation/single_run.py "Create a customer churn analysis dashboard"
+# Generate a single app via Dagger (requires Linux binary)
+uv run cli/generation/single_run.py "Create a customer churn analysis dashboard" \
+  --mcp_binary=/path/to/linux/edda_mcp \
+  --mcp_args='["experimental", "apps-mcp"]'
+
+# Batch generate from prompts
+uv run cli/generation/bulk_run.py \
+  --mcp_binary=/path/to/linux/edda_mcp \
+  --mcp_args='["experimental", "apps-mcp"]'
 
 # Use LiteLLM backend with specific model
 uv run cli/generation/single_run.py "Create a customer churn analysis dashboard" \
-  --backend=litellm --model=openrouter/minimax/minimax-m2
+  --backend=litellm --model=gemini/gemini-2.5-pro \
+  --mcp_binary=/path/to/linux/edda_mcp
+```
 
-# Batch generate from prompts (databricks set by default)
-uv run cli/generation/bulk_run.py
+**Building Linux binary (for macOS users):**
+```bash
+cd /path/to/cli
+GOOS=linux GOARCH=arm64 go build -o cli-linux .
+# Then use --mcp_binary=/path/to/cli-linux
+```
 
-# Batch generate with test prompts
-uv run cli/generation/bulk_run.py --prompts=test
+### Local Debugging (without Dagger)
 
-# Batch generate with LiteLLM backend
-uv run cli/generation/bulk_run.py --backend=litellm --model=gemini/gemini-2.5-pro
+For faster iteration during development, run directly on host:
 
-# Custom output directory
-uv run cli/generation/bulk_run.py --output-dir=/path/to/custom/folder
-
-# Custom MCP binary (for testing modified edda_mcp)
-uv run cli/generation/bulk_run.py --mcp-binary=/path/to/custom/edda_mcp
-
-# Combined example
-uv run cli/generation/bulk_run.py \
-  --backend=litellm \
-  --model=gemini/gemini-2.5-pro \
-  --output-dir=./my-apps \
-  --mcp-binary=../edda/target/release/edda_mcp
+```bash
+# Local run with macOS binary
+uv run python cli/generation/container_runner.py "Create a dashboard" \
+  --app_name=debug-test \
+  --mcp_binary=/usr/local/bin/edda_mcp \
+  --mcp_args='["experimental", "apps-mcp"]' \
+  --output_dir=./app
 ```
 
 ### Evaluate Generated Apps
@@ -155,8 +168,10 @@ klaudbiusz/
 │   │   ├── prompts/               # Prompt collections
 │   │   ├── codegen.py             # Claude Agent SDK backend
 │   │   ├── codegen_multi.py       # LiteLLM backend
-│   │   ├── single_run.py          # Single app generation
-│   │   ├── bulk_run.py            # Batch app generation
+│   │   ├── dagger_run.py          # Dagger container orchestration
+│   │   ├── container_runner.py    # Runner script (inside container or local)
+│   │   ├── single_run.py          # Single app generation (via Dagger)
+│   │   ├── bulk_run.py            # Batch app generation (via Dagger)
 │   │   └── screenshot.py          # Batch screenshotting
 │   ├── evaluation/                 # App evaluation
 │   │   ├── evaluate_all.py        # Batch evaluation

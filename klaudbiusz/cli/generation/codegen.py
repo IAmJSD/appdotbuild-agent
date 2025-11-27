@@ -226,13 +226,12 @@ Never deploy the app, just scaffold and build it.
                 case ToolUseBlock(name="Task"):
                     await self._log_tool_use(block, truncate)
                 case ToolUseBlock(name="mcp__edda__invoke_databricks_cli"):
+                    await self._log_generic_tool(block, truncate)
                     cli_cmd = block.input["command"]
-                    pwd = block.input.get("working_directory", "")
-                    if "bundle init" in cli_cmd and pwd:
-                        self.scaffold_tracker.track(block.id, pwd)
-                        logger.warning(f"Tracking scaffolded app directory: {pwd}")
-                    else:
-                        logger.info(f"Not tracking Databricks CLI command: {cli_cmd}")
+                    if "experimental apps-mcp tools init-template" in cli_cmd:
+                        *_, pwd_arg = cli_cmd.split(" ")
+                        self.scaffold_tracker.track(block.id, pwd_arg)
+                        logger.warning(f"Tracking scaffolded app directory: {pwd_arg}")
                 case ToolUseBlock(name="mcp__edda__scaffold_data_app"):
                     if block.input is not None and "work_dir" in block.input:
                         self.scaffold_tracker.track(block.id, block.input["work_dir"])

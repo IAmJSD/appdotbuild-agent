@@ -77,7 +77,7 @@ class DaggerAppGenerator:
             container = await self._build_container(client)
 
             # path inside container for generated app
-            app_output = f"/workspace/app/{app_name}"
+            app_output = f"/workspace/{app_name}"
 
             # build command using container_runner.py (already in image via Dockerfile COPY)
             cmd = [
@@ -92,8 +92,8 @@ class DaggerAppGenerator:
             if mcp_args:
                 cmd.append(f"--mcp_args={json.dumps(mcp_args)}")
 
-            # ensure log directory exists and create app output dir
-            container = container.with_exec(["mkdir", "-p", "/workspace/logs", "/workspace/app"])
+            # ensure log directory exists
+            container = container.with_exec(["mkdir", "-p", "/workspace/logs"])
 
             # run generation
             result = container.with_exec(cmd)

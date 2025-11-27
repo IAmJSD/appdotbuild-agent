@@ -83,6 +83,7 @@ def main(
     generator = DaggerAppGenerator(
         mcp_binary=Path(mcp_binary),
         output_dir=out_path,
+        stream_logs=False,  # disable TUI for bulk runs
     )
 
     try:
