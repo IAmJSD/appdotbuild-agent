@@ -1,0 +1,25 @@
+# ignore generated apps and artifacts
+app/
+app-eval/
+results/
+
+# ignore python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.ruff_cache/
+
+# ignore git
+.git/
+.gitignore
+
+# ignore env files (will be mounted)
+.env
+
+# ignore venv
+.venv/
+
+# ignore build artifacts
+.DS_Store

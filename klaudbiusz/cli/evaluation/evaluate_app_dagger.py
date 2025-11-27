@@ -7,6 +7,7 @@ conflicts and machine environment pollution.
 
 import asyncio
 import json
+import os
 import sys
 import time
 from dataclasses import asdict
@@ -53,6 +54,11 @@ for env_path in env_paths:
     if env_path.exists():
         load_dotenv(env_path, override=True)
         break
+
+
+def _restore_terminal_cursor() -> None:
+    """Restore terminal cursor after Dagger run (workaround for dagger/dagger#7160)."""
+    os.system("tput cnorm 2>/dev/null || true")
 
 
 async def evaluate_app_async(
@@ -390,7 +396,10 @@ async def main_async():
 
 def main():
     """Sync wrapper for async main."""
-    asyncio.run(main_async())
+    try:
+        asyncio.run(main_async())
+    finally:
+        _restore_terminal_cursor()
 
 
 if __name__ == "__main__":

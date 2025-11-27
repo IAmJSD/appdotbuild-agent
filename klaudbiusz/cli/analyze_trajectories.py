@@ -136,7 +136,12 @@ Provide a concise analysis focusing on actionable insights."""
     return response.choices[0].message.content  # type: ignore[attr-defined]
 
 
-def get_mcp_tools_description(mcp_binary: str | None, project_root: Path, mcp_json_path: str | None = None) -> str:
+def get_mcp_tools_description(
+    mcp_binary: str | None,
+    project_root: Path,
+    mcp_json_path: str | None = None,
+    mcp_args: list[str] | None = None,
+) -> str:
     """Extract MCP tool definitions by querying the MCP server.
 
     Returns empty string if mcp_binary is not provided.
@@ -145,7 +150,7 @@ def get_mcp_tools_description(mcp_binary: str | None, project_root: Path, mcp_js
         return ""
 
     mcp_manifest = validate_mcp_manifest(mcp_binary, project_root)
-    command, args = build_mcp_command(mcp_binary, mcp_manifest, mcp_json_path)
+    command, args = build_mcp_command(mcp_binary, mcp_manifest, mcp_json_path, mcp_args)
 
     proc = subprocess.Popen(
         [command, *args],
@@ -403,6 +408,7 @@ async def analyze_trajectories_async(
     trajectories_pattern: str = "./app/*/trajectory.jsonl",
     eval_report_path: str | None = None,
     mcp_json_path: str | None = None,
+    mcp_args: list[str] | None = None,
 ):
     """Analyze trajectories using map-reduce approach with LLM, then agent-based analysis."""
     litellm.drop_params = True
@@ -414,7 +420,7 @@ async def analyze_trajectories_async(
     mcp_tools_doc = ""
     if mcp_binary:
         logger.info("📋 Extracting MCP tool definitions")
-        mcp_tools_doc = get_mcp_tools_description(mcp_binary, project_root, mcp_json_path)
+        mcp_tools_doc = get_mcp_tools_description(mcp_binary, project_root, mcp_json_path, mcp_args)
 
     eval_report = ""
     if eval_report_path:
@@ -460,6 +466,7 @@ def cli(
     map_model: str = "anthropic/claude-haiku-4-5",
     eval_report: str | None = None,
     mcp_json: str | None = None,
+    mcp_args: list[str] | None = None,
 ):
     """Analyze agent trajectories to find friction points and patterns.
 
@@ -472,6 +479,7 @@ def cli(
         map_model: LiteLLM model identifier for individual trajectory analysis
         eval_report: Path to evaluation report JSON (optional)
         mcp_json: Optional path to JSON config file for edda_mcp
+        mcp_args: Optional list of args passed to the MCP server (overrides defaults)
     """
     coloredlogs.install(
         level=logging.INFO,
@@ -490,6 +498,7 @@ def cli(
             trajectories_pattern,
             eval_report,
             mcp_json,
+            mcp_args,
         )
     )
 

@@ -1,12 +1,21 @@
-import fire
+"""Single app generation via Dagger."""
+
+import asyncio
+import os
 from datetime import datetime
+from pathlib import Path
+
+import fire
 from dotenv import load_dotenv
 
-from cli.generation.codegen import ClaudeAppBuilder, GenerationMetrics as ClaudeGenerationMetrics
-from cli.generation.codegen_multi import LiteLLMAppBuilder
+from cli.generation.dagger_run import DaggerAppGenerator
 
-# Load environment variables from .env file
 load_dotenv()
+
+
+def _restore_terminal_cursor() -> None:
+    """Restore terminal cursor after Dagger run (workaround for dagger/dagger#7160)."""
+    os.system("tput cnorm 2>/dev/null || true")
 
 
 def run(
@@ -14,85 +23,61 @@ def run(
     app_name: str | None = None,
     backend: str = "claude",
     model: str | None = None,
-    wipe_db: bool = True,
     mcp_binary: str | None = None,
-    mcp_json: str | None = None,
     mcp_args: list[str] | None = None,
-):
-    """Run app builder with given prompt.
+    output_dir: str | None = None,
+) -> dict[str, str | None]:
+    """Run app generation in Dagger container.
 
     Args:
         prompt: The prompt describing what to build
         app_name: Optional app name (default: timestamp-based)
         backend: Backend to use ("claude" or "litellm", default: "claude")
-        model: LLM model (required if backend=litellm, e.g., "openrouter/minimax/minimax-m2")
-        wipe_db: Whether to wipe database on start
-        mcp_binary: Optional path to pre-built edda-mcp binary (default: use cargo run)
-        mcp_json: Optional path to JSON config file for edda_mcp
-        mcp_args: Optional list of args passed to the MCP server (overrides defaults)
+        model: LLM model (required if backend=litellm)
+        mcp_binary: Path to edda_mcp binary (required)
+        mcp_args: Optional list of args passed to the MCP server
 
     Usage:
         # Claude backend (default)
-        python main.py "build dashboard" --app_name=my-dashboard
+        python single_run.py "build dashboard" --mcp_binary=/path/to/edda_mcp
 
         # LiteLLM backend
-        python main.py "build dashboard" --backend=litellm --model=openrouter/minimax/minimax-m2
-        python main.py "build dashboard" --backend=litellm --model=gemini/gemini-2.5-pro
-
-        # Custom MCP config
-        python main.py "build dashboard" --mcp_json=./config/databricks-cli.json
+        python single_run.py "build dashboard" --backend=litellm --model=gemini/gemini-2.5-pro --mcp_binary=/path/to/edda_mcp
 
         # Custom MCP args
-        python main.py "build dashboard" --mcp_args='["experimental", "apps-mcp"]'
+        python single_run.py "build dashboard" --mcp_binary=/path/to/edda_mcp --mcp_args='["experimental", "apps-mcp"]'
     """
+    if not mcp_binary:
+        raise ValueError("--mcp_binary is required")
+
+    if backend == "litellm" and not model:
+        raise ValueError("--model is required when using --backend=litellm")
+
     if app_name is None:
         app_name = f"app-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
 
-    # single run always shows logs
-    suppress_logs = False
+    generator = DaggerAppGenerator(
+        mcp_binary=Path(mcp_binary),
+        output_dir=Path(output_dir) if output_dir else Path("./app"),
+    )
 
-    match backend:
-        case "claude":
-            builder = ClaudeAppBuilder(
-                app_name=app_name,
-                wipe_db=wipe_db,
-                suppress_logs=suppress_logs,
-                mcp_binary=mcp_binary,
-                mcp_json_path=mcp_json,
-                mcp_args=mcp_args,
-            )
-            metrics = builder.run(prompt, wipe_db=wipe_db)
-        case "litellm":
-            if not model:
-                raise ValueError("--model is required when using --backend=litellm")
-            builder_litellm = LiteLLMAppBuilder(
-                app_name=app_name,
-                model=model,
-                mcp_binary=mcp_binary,
-                mcp_json_path=mcp_json,
-                mcp_args=mcp_args,
-                suppress_logs=suppress_logs,
-            )
-            litellm_metrics = builder_litellm.run(prompt)
-            # convert to dict format for consistent output
-            metrics: ClaudeGenerationMetrics = {
-                "cost_usd": litellm_metrics.cost_usd,
-                "input_tokens": litellm_metrics.input_tokens,
-                "output_tokens": litellm_metrics.output_tokens,
-                "turns": litellm_metrics.turns,
-                "app_dir": litellm_metrics.app_dir,
-            }
-        case _:
-            raise ValueError(f"Unknown backend: {backend}. Use 'claude' or 'litellm'")
+    try:
+        app_dir, log_file = asyncio.run(
+            generator.generate_single(prompt, app_name, backend, model, mcp_args)
+        )
+    finally:
+        _restore_terminal_cursor()
 
-    if metrics:
-        print(f"\n{'=' * 80}")
-        print("Final metrics:")
-        print(f"  Cost: ${metrics['cost_usd']:.4f}")
-        print(f"  Turns: {metrics['turns']}")
-        print(f"  App dir: {metrics.get('app_dir', 'NOT CAPTURED')}")
-        print(f"{'=' * 80}\n")
-    return metrics
+    print(f"\n{'=' * 80}")
+    if app_dir:
+        print("Generation complete:")
+        print(f"  App: {app_dir}")
+    else:
+        print("No app generated (agent may have just answered without creating files)")
+    print(f"  Log: {log_file}")
+    print(f"{'=' * 80}\n")
+
+    return {"app_dir": str(app_dir) if app_dir else None, "log_file": str(log_file)}
 
 
 def main():

@@ -95,11 +95,7 @@ Use up to 10 tools per call to speed up the process.
 Never deploy the app, just scaffold and build it.
 """
 
-        disallowed_tools = [
-            "NotebookEdit",
-            "WebSearch",
-            "WebFetch",
-        ]
+        disallowed_tools = ["NotebookEdit", "WebSearch", "WebFetch", "Bash"]
 
         command, args = build_mcp_command(self.mcp_binary, self.mcp_manifest, self.mcp_json_path, self.mcp_args)
 
@@ -229,6 +225,14 @@ Never deploy the app, just scaffold and build it.
                     await self._log_todo_update(block, truncate)
                 case ToolUseBlock(name="Task"):
                     await self._log_tool_use(block, truncate)
+                case ToolUseBlock(name="mcp__edda__invoke_databricks_cli"):
+                    cli_cmd = block.input["command"]
+                    pwd = block.input.get("working_directory", "")
+                    if "bundle init" in cli_cmd and pwd:
+                        self.scaffold_tracker.track(block.id, pwd)
+                        logger.warning(f"Tracking scaffolded app directory: {pwd}")
+                    else:
+                        logger.info(f"Not tracking Databricks CLI command: {cli_cmd}")
                 case ToolUseBlock(name="mcp__edda__scaffold_data_app"):
                     if block.input is not None and "work_dir" in block.input:
                         self.scaffold_tracker.track(block.id, block.input["work_dir"])

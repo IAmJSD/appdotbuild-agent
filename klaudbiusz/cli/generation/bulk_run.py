@@ -1,199 +1,63 @@
-"""Bulk runner for generating multiple apps from hardcoded prompts."""
+"""Bulk app generation via Dagger with parallelism."""
 
+import asyncio
 import json
 import os
-import signal
-import sys
 from datetime import datetime
 from pathlib import Path
-from typing import TypedDict
 
+import fire
 from dotenv import load_dotenv
-from joblib import Parallel, delayed
 
-from cli.generation.codegen import ClaudeAppBuilder
-from cli.generation.codegen import GenerationMetrics as ClaudeGenerationMetrics
-from cli.generation.codegen_multi import LiteLLMAppBuilder
-from cli.generation.prompts.databricks import PROMPTS as DATABRICKS_PROMPTS
-from cli.utils.litellm_multiprocess_fix import patch_litellm_for_multiprocessing
+from cli.generation.dagger_run import DaggerAppGenerator
 
-patch_litellm_for_multiprocessing()
-
-# Unified type for metrics from both backends
-GenerationMetrics = ClaudeGenerationMetrics
-
-# Load environment variables from .env file
 load_dotenv()
 
-# Re-export for eval compatibility
-PROMPTS = DATABRICKS_PROMPTS
 
-
-class RunResult(TypedDict):
-    prompt: str
-    success: bool
-    metrics: GenerationMetrics | None
-    error: str | None
-    app_dir: str | None
-    mcp_binary: str | None
-    backend: str
-    model: str | None
-
-
-def run_single_generation(
-    app_name: str,
-    prompt: str,
-    backend: str,
-    model: str | None,
-    wipe_db: bool = False,
-    suppress_logs: bool = True,
-    mcp_binary: str | None = None,
-    mcp_json: str | None = None,
-    mcp_args: list[str] | None = None,
-    output_dir: str | None = None,
-) -> RunResult:
-    # re-apply litellm patch in worker process (joblib uses spawn/fork)
-    if backend == "litellm":
-        patch_litellm_for_multiprocessing()
-
-    def timeout_handler(signum, frame):
-        raise TimeoutError("Generation timed out after 1200 seconds")
-
-    try:
-        # set 20 minute timeout for entire generation
-        signal.signal(signal.SIGALRM, timeout_handler)
-        signal.alarm(1200)
-
-        match backend:
-            case "claude":
-                codegen = ClaudeAppBuilder(
-                    app_name=app_name,
-                    wipe_db=wipe_db,
-                    suppress_logs=suppress_logs,
-                    mcp_binary=mcp_binary,
-                    mcp_json_path=mcp_json,
-                    mcp_args=mcp_args,
-                    output_dir=output_dir,
-                )
-                metrics = codegen.run(prompt, wipe_db=wipe_db)
-                app_dir = metrics.get("app_dir") if metrics else None
-            case "litellm":
-                if not model:
-                    raise ValueError("--model is required when using --backend=litellm")
-                builder = LiteLLMAppBuilder(
-                    app_name=app_name,
-                    model=model,
-                    mcp_binary=mcp_binary,
-                    mcp_json_path=mcp_json,
-                    mcp_args=mcp_args,
-                    suppress_logs=suppress_logs,
-                    output_dir=output_dir,
-                )
-                litellm_metrics = builder.run(prompt)
-                # convert LiteLLM metrics to dict format matching Claude SDK
-                metrics: GenerationMetrics = {
-                    "cost_usd": litellm_metrics.cost_usd,
-                    "input_tokens": litellm_metrics.input_tokens,
-                    "output_tokens": litellm_metrics.output_tokens,
-                    "turns": litellm_metrics.turns,
-                    "app_dir": litellm_metrics.app_dir,
-                }
-                app_dir = litellm_metrics.app_dir
-            case _:
-                raise ValueError(f"Unknown backend: {backend}. Use 'claude' or 'litellm'")
-
-        signal.alarm(0)  # cancel timeout
-
-        return {
-            "prompt": prompt,
-            "success": True,
-            "metrics": metrics,
-            "error": None,
-            "app_dir": app_dir,
-            "mcp_binary": mcp_binary,
-            "backend": backend,
-            "model": model,
-        }
-    except TimeoutError as e:
-        signal.alarm(0)  # cancel timeout
-        print(f"[TIMEOUT] {prompt[:80]}...", file=sys.stderr, flush=True)
-        return {
-            "prompt": prompt,
-            "success": False,
-            "metrics": None,
-            "error": str(e),
-            "app_dir": None,
-            "mcp_binary": mcp_binary,
-            "backend": backend,
-            "model": model,
-        }
-    except Exception as e:
-        signal.alarm(0)  # cancel timeout
-        print(f"[ERROR] {prompt[:80]}... - {e}", file=sys.stderr, flush=True)
-        return {
-            "prompt": prompt,
-            "success": False,
-            "metrics": None,
-            "error": str(e),
-            "app_dir": None,
-            "mcp_binary": mcp_binary,
-            "backend": backend,
-            "model": model,
-        }
+def _restore_terminal_cursor() -> None:
+    """Restore terminal cursor after Dagger run (workaround for dagger/dagger#7160)."""
+    os.system("tput cnorm 2>/dev/null || true")
 
 
 def main(
     prompts: str = "databricks",
     backend: str = "claude",
     model: str | None = None,
-    wipe_db: bool = False,
-    n_jobs: int = -1,
     mcp_binary: str | None = None,
-    mcp_json: str | None = None,
     mcp_args: list[str] | None = None,
     output_dir: str | None = None,
+    max_concurrency: int = 4,
 ) -> None:
-    """Bulk app generation from predefined prompt sets.
+    """Bulk app generation via Dagger with parallelism.
 
     Args:
-        prompts: Prompt set to use ("databricks", "databricks_v2", or "test", default: "databricks")
-        backend: Backend to use ("claude" or "litellm", default: "claude")
-        model: LLM model (required if backend=litellm, e.g., "openrouter/minimax/minimax-m2")
-        wipe_db: Whether to wipe database on start
-        n_jobs: Number of parallel jobs (-1 for all cores)
-        mcp_args: Optional list of args passed to the MCP server (overrides defaults)
-        mcp_binary: Optional path to pre-built edda-mcp binary (default: use cargo run)
-        mcp_json: Optional path to JSON config file for edda_mcp
-        output_dir: Custom output directory for generated apps (default: ./app)
+        prompts: Prompt set to use ("databricks", "databricks_v2", or "test")
+        backend: Backend to use ("claude" or "litellm")
+        model: LLM model (required if backend=litellm)
+        mcp_binary: Path to edda_mcp binary (required)
+        mcp_args: Optional list of args passed to the MCP server
+        output_dir: Custom output directory for generated apps
+        max_concurrency: Maximum parallel generations (default: 4)
 
     Usage:
-        # Claude backend (default) with databricks prompts (default)
-        python bulk_run.py
+        # Claude backend with databricks prompts
+        python bulk_run.py --mcp_binary=/path/to/edda_mcp
 
-        # Claude backend with databricks_v2 prompts
-        python bulk_run.py --prompts=databricks_v2
-
-        # Claude backend with test prompts
-        python bulk_run.py --prompts=test
+        # With custom concurrency
+        python bulk_run.py --mcp_binary=/path/to/edda_mcp --max_concurrency=8
 
         # LiteLLM backend
-        python bulk_run.py --backend=litellm --model=openrouter/minimax/minimax-m2
-        python bulk_run.py --prompts=test --backend=litellm --model=gemini/gemini-2.5-pro
-
-        # Custom MCP config
-        python bulk_run.py --mcp_json=./config/databricks-cli.json
-
-        # Custom output directory
-        python bulk_run.py --output-dir=/path/to/custom/folder
-
-        # Custom MCP binary
-        python bulk_run.py --mcp-binary=/path/to/edda_mcp
-
-        # Optional: Run screenshots after generation
-        python screenshot.py ./app --concurrency=5 --wait-time=120000
+        python bulk_run.py --backend=litellm --model=gemini/gemini-2.5-pro --mcp_binary=/path/to/edda_mcp
     """
-    # bulk run always suppresses logs
-    suppress_logs = True
+    if not mcp_binary:
+        raise ValueError("--mcp_binary is required")
+
+    if backend == "litellm" and not model:
+        raise ValueError("--model is required when using --backend=litellm")
+
+    # validate required environment variables
+    if not os.environ.get("DATABRICKS_HOST") or not os.environ.get("DATABRICKS_TOKEN"):
+        raise ValueError("DATABRICKS_HOST and DATABRICKS_TOKEN environment variables must be set")
 
     # load prompt set
     match prompts:
@@ -206,67 +70,37 @@ def main(
         case _:
             raise ValueError(f"Unknown prompt set: {prompts}. Use 'databricks', 'databricks_v2', or 'test'")
 
-    # validate backend-specific requirements
-    if backend == "litellm" and not model:
-        raise ValueError("--model is required when using --backend=litellm")
-
-    # validate required environment variables
-    if not os.environ.get("DATABRICKS_HOST") or not os.environ.get("DATABRICKS_TOKEN"):
-        raise ValueError("DATABRICKS_HOST and DATABRICKS_TOKEN environment variables must be set")
-
     print(f"Starting bulk generation for {len(selected_prompts)} prompts...")
     print(f"Backend: {backend}")
     if backend == "litellm":
         print(f"Model: {model}")
     print(f"Prompt set: {prompts}")
-    print(f"Parallel jobs: {n_jobs}")
-    if backend == "claude":
-        print(f"Wipe DB: {wipe_db}")
-    print(f"MCP binary: {mcp_binary if mcp_binary else 'cargo run (default)'}")
-    print(f"Output dir: {output_dir if output_dir else './app (default)'}\n")
+    print(f"Max concurrency: {max_concurrency}")
+    print(f"MCP binary: {mcp_binary}")
+    out_path = Path(output_dir) if output_dir else Path("./app")
+    print(f"Output dir: {out_path}\n")
 
-    # generate all apps
-    results: list[RunResult] = Parallel(n_jobs=n_jobs, backend="loky", verbose=10)(  # type: ignore[assignment]
-        delayed(run_single_generation)(
-            app_name, prompt, backend, model, wipe_db, suppress_logs, mcp_binary, mcp_json, mcp_args, output_dir
-        )
-        for app_name, prompt in selected_prompts.items()
+    generator = DaggerAppGenerator(
+        mcp_binary=Path(mcp_binary),
+        output_dir=out_path,
     )
 
-    # separate successful and failed generations
-    successful: list[RunResult] = []
-    failed: list[RunResult] = []
-    for r in results:
-        success = r["success"]
-        if success:
-            successful.append(r)
-        else:
-            failed.append(r)
+    try:
+        results = asyncio.run(
+            generator.generate_bulk(
+                selected_prompts,
+                backend,
+                model,
+                mcp_args,
+                max_concurrency,
+            )
+        )
+    finally:
+        _restore_terminal_cursor()
 
-    apps_dir = "./app/"
-    # get apps directory from first successful app (used for output file path)
-    if successful:
-        first_app_dir = next((r["app_dir"] for r in successful if r["app_dir"]), None)
-        if first_app_dir:
-            apps_dir = str(Path(first_app_dir).parent)
-
-    successful_with_metrics: list[RunResult] = []
-    for r in successful:
-        metrics = r["metrics"]
-        if metrics is not None:
-            successful_with_metrics.append(r)
-
-    total_cost = 0.0
-    total_input_tokens = 0
-    total_output_tokens = 0
-    total_turns = 0
-    for r in successful_with_metrics:
-        metrics = r["metrics"]
-        assert metrics is not None
-        total_cost += metrics["cost_usd"]
-        total_input_tokens += metrics["input_tokens"]
-        total_output_tokens += metrics["output_tokens"]
-        total_turns += metrics["turns"]
+    # separate successful and failed
+    successful = [(name, app_dir, log) for name, app_dir, log, err in results if err is None]
+    failed = [(name, log, err) for name, app_dir, log, err in results if err is not None]
 
     print(f"\n{'=' * 80}")
     print("Bulk Generation Summary")
@@ -274,62 +108,49 @@ def main(
     print(f"Total prompts: {len(selected_prompts)}")
     print(f"Successful: {len(successful)}")
     print(f"Failed: {len(failed)}")
-    print(f"\nTotal cost: ${total_cost:.4f}")
-    print(f"Total input tokens: {total_input_tokens}")
-    print(f"Total output tokens: {total_output_tokens}")
-    print(f"Total turns: {total_turns}")
 
-    if successful_with_metrics:
-        avg_cost = total_cost / len(successful_with_metrics)
-        avg_input = total_input_tokens / len(successful_with_metrics)
-        avg_output = total_output_tokens / len(successful_with_metrics)
-        avg_turns = total_turns / len(successful_with_metrics)
-        print("\nAverage per generation:")
-        print(f"  Cost: ${avg_cost:.4f}")
-        print(f"  Input tokens: {avg_input:.0f}")
-        print(f"  Output tokens: {avg_output:.0f}")
-        print(f"  Turns: {avg_turns:.1f}")
-
-    if len(failed) > 0:
+    if failed:
         print(f"\n{'=' * 80}")
         print("Failed generations:")
         print(f"{'=' * 80}")
-        for r in failed:
-            prompt = r["prompt"]
-            error = r["error"]
-            print(f"  - {prompt[:50]}...")
-            if error is not None:
-                print(f"    Error: {error}")
+        for name, log, err in failed:
+            print(f"  - {name}")
+            print(f"    Error: {err}")
+            if log:
+                print(f"    Log: {log}")
 
-    if len(successful) > 0:
-        apps_with_dirs: list[tuple[str, str]] = []
-        for r in successful:
-            prompt = r["prompt"]
-            app_dir = r["app_dir"]
-            if app_dir is not None:
-                apps_with_dirs.append((prompt, app_dir))
-
-        if apps_with_dirs:
-            print(f"\n{'=' * 80}")
-            print("Generated apps:")
-            print(f"{'=' * 80}")
-            for prompt, app_dir in apps_with_dirs:
-                print(f"  - {prompt[:60]}...")
-                print(f"    Dir: {app_dir}")
+    if successful:
+        print(f"\n{'=' * 80}")
+        print("Generated apps:")
+        print(f"{'=' * 80}")
+        for name, app_dir, log in successful:
+            print(f"  - {name}")
+            print(f"    Dir: {app_dir}")
+            print(f"    Log: {log}")
 
     print(f"\n{'=' * 80}\n")
 
+    # save results json
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     backend_suffix = f"_{backend}" if backend != "claude" else ""
-    output_file = Path(apps_dir) / Path(f"bulk_run_results{backend_suffix}_{timestamp}.json")
-
-    # ensure directory exists
+    output_file = out_path / f"bulk_run_results{backend_suffix}_{timestamp}.json"
     output_file.parent.mkdir(parents=True, exist_ok=True)
-    output_file.write_text(json.dumps(results, indent=2))
+
+    results_data = [
+        {
+            "app_name": name,
+            "success": err is None,
+            "app_dir": str(app_dir) if app_dir else None,
+            "log_file": str(log) if log else None,
+            "error": err,
+            "backend": backend,
+            "model": model,
+        }
+        for name, app_dir, log, err in results
+    ]
+    output_file.write_text(json.dumps(results_data, indent=2))
     print(f"Results saved to {output_file}")
 
 
 if __name__ == "__main__":
-    import fire
-
     fire.Fire(main)
