@@ -16,24 +16,22 @@ from cli.generation.codegen import GenerationMetrics
 logger = logging.getLogger(__name__)
 
 
-def _read_metrics_from_trajectory(app_dir: Path) -> GenerationMetrics | None:
-    """Read metrics from trajectory.jsonl in app directory."""
-    traj_file = app_dir / "trajectory.jsonl"
-    if not traj_file.exists():
+def _read_metrics_from_app(app_dir: Path) -> GenerationMetrics | None:
+    """Read metrics from generation_metrics.json in app directory."""
+    metrics_file = app_dir / "generation_metrics.json"
+    if not metrics_file.exists():
         return None
 
-    # trajectory.jsonl has one JSON object per line, first line is the run metadata
     try:
-        first_line = traj_file.read_text().split("\n")[0]
-        data = json.loads(first_line)
+        data = json.loads(metrics_file.read_text())
         return GenerationMetrics(
             cost_usd=data.get("cost_usd", 0.0),
-            input_tokens=data.get("total_tokens", 0),  # trajectory stores total_tokens
-            output_tokens=0,  # not tracked separately in trajectory
+            input_tokens=data.get("input_tokens", 0),
+            output_tokens=data.get("output_tokens", 0),
             turns=data.get("turns", 0),
         )
-    except (json.JSONDecodeError, IndexError, KeyError) as e:
-        logger.warning(f"Failed to parse trajectory metrics: {e}")
+    except (json.JSONDecodeError, KeyError) as e:
+        logger.warning(f"Failed to parse generation metrics: {e}")
         return None
 
 
@@ -159,8 +157,8 @@ class DaggerAppGenerator:
                 return None, log_file_local, None
             raise
 
-        # read metrics from trajectory file
-        metrics = _read_metrics_from_trajectory(app_dir_local)
+        # read metrics from generation_metrics.json
+        metrics = _read_metrics_from_app(app_dir_local)
         return app_dir_local, log_file_local, metrics
 
     async def generate_bulk(
