@@ -8,6 +8,7 @@ from pathlib import Path
 
 import fire
 from dotenv import load_dotenv
+from tqdm import tqdm
 
 from cli.generation.dagger_run import DaggerAppGenerator
 
@@ -86,6 +87,23 @@ def main(
         stream_logs=False,  # disable TUI for bulk runs
     )
 
+    # progress bar with success/fail tracking
+    pbar = tqdm(total=len(selected_prompts), desc="Generating apps", unit="app")
+    success_count = 0
+    fail_count = 0
+
+    def on_complete(app_name: str, success: bool) -> None:
+        nonlocal success_count, fail_count
+        if success:
+            success_count += 1
+            status = "✓"
+        else:
+            fail_count += 1
+            status = "✗"
+        pbar.set_postfix(ok=success_count, fail=fail_count)
+        pbar.set_description(f"{status} {app_name}")
+        pbar.update(1)
+
     try:
         results = asyncio.run(
             generator.generate_bulk(
@@ -94,9 +112,11 @@ def main(
                 model,
                 mcp_args,
                 max_concurrency,
+                on_complete=on_complete,
             )
         )
     finally:
+        pbar.close()
         _restore_terminal_cursor()
 
     # separate successful and failed

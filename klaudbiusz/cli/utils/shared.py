@@ -274,6 +274,36 @@ class ScaffoldTracker:
         if tool_id in self._pending:
             self.app_dir = self._pending.pop(tool_id)
 
+    def detect_from_filesystem(self, search_root: Path | None = None) -> str | None:
+        """Fallback: detect scaffold by finding package.json at top level.
+
+        Globs for package.json and chooses the one closest to search_root.
+        This works in dagger environments where /workspace is the base.
+
+        Args:
+            search_root: Root directory to search from (e.g., /workspace or output_dir)
+
+        Returns:
+            Path to detected app directory, or None if not found
+        """
+        if search_root is None:
+            search_root = Path("/workspace")
+
+        if not search_root.exists():
+            logger.warning(f"⚠️ Search root does not exist: {search_root}")
+            return None
+
+        logger.info(f"🔍 Searching for scaffolded app directory under {search_root}")
+        # glob for all package.json files
+        marker_files = list(search_root.glob("**/databricks.yml"))
+        if not marker_files:
+            logger.warning("⚠️ Could not detect scaffolded app directory from filesystem")
+
+        file, *_ = marker_files
+        app_dir = file.parent
+        logger.info(f"✅ Detected scaffolded app directory: {app_dir}")
+        return str(app_dir)
+
 
 def validate_mcp_manifest(mcp_binary: str | None, project_root: Path) -> Path | None:
     """Validate MCP manifest exists if using cargo run.

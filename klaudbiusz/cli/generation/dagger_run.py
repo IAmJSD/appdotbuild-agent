@@ -6,6 +6,7 @@ import logging
 import os
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import dagger
@@ -72,53 +73,70 @@ class DaggerAppGenerator:
             tuple of (app_dir or None, log_file) paths on host.
             app_dir is None if agent didn't create an app.
         """
-        cfg = dagger.Config(log_output=sys.stderr) if self.stream_logs else dagger.Config()
+        if self.stream_logs:
+            cfg = dagger.Config(log_output=sys.stderr)
+        else:
+            cfg = dagger.Config(log_output=open(os.devnull, "w"))
         async with dagger.Connection(cfg) as client:
             container = await self._build_container(client)
+            return await self._run_generation(
+                client, container, prompt, app_name, backend, model, mcp_args
+            )
 
-            # path inside container for generated app
-            app_output = f"/workspace/{app_name}"
+    async def _run_generation(
+        self,
+        client: dagger.Client,
+        base_container: dagger.Container,
+        prompt: str,
+        app_name: str,
+        backend: str,
+        model: str | None,
+        mcp_args: list[str] | None,
+    ) -> tuple[Path | None, Path]:
+        """Run generation in container and export results."""
+        # path inside container for generated app
+        app_output = f"/workspace/{app_name}"
 
-            # build command using container_runner.py (already in image via Dockerfile COPY)
-            cmd = [
-                "python",
-                "cli/generation/container_runner.py",
-                prompt,
-                f"--app_name={app_name}",
-                f"--backend={backend}",
-            ]
-            if model:
-                cmd.append(f"--model={model}")
-            if mcp_args:
-                cmd.append(f"--mcp_args={json.dumps(mcp_args)}")
+        # build command using container_runner.py (already in image via Dockerfile COPY)
+        cmd = [
+            "python",
+            "cli/generation/container_runner.py",
+            prompt,
+            f"--app_name={app_name}",
+            f"--backend={backend}",
+        ]
+        if model:
+            cmd.append(f"--model={model}")
+        if mcp_args:
+            cmd.append(f"--mcp_args={json.dumps(mcp_args)}")
 
-            # ensure log directory exists
-            container = container.with_exec(["mkdir", "-p", "/workspace/logs"])
+        # ensure log directory exists
+        container = base_container.with_exec(["mkdir", "-p", "/workspace/logs"])
 
-            # run generation
-            result = container.with_exec(cmd)
+        # run generation
+        result = container.with_exec(cmd)
 
-            # capture combined stdout/stderr as log
-            log_content = await result.stdout()
-            stderr_content = await result.stderr()
-            full_log = f"{log_content}\n\n=== STDERR ===\n{stderr_content}" if stderr_content else log_content
+        # capture combined stdout/stderr as log
+        log_content = await result.stdout()
+        stderr_content = await result.stderr()
+        full_log = f"{log_content}\n\n=== STDERR ===\n{stderr_content}" if stderr_content else log_content
 
-            # save log to host
-            log_file_local = self.output_dir / "logs" / f"{app_name}.log"
-            log_file_local.parent.mkdir(parents=True, exist_ok=True)
-            log_file_local.write_text(full_log)
+        # save log to host
+        log_file_local = self.output_dir / "logs" / f"{app_name}.log"
+        log_file_local.parent.mkdir(parents=True, exist_ok=True)
+        log_file_local.write_text(full_log)
 
-            # export app directory (if it exists)
-            app_dir_local = self.output_dir / app_name
-            try:
-                await result.directory(app_output).export(str(app_dir_local))
-            except dagger.QueryError as e:
-                if "no such file or directory" in str(e):
-                    # agent didn't create an app directory (e.g. just answered a question)
-                    return None, log_file_local
-                raise
+        # export app directory (if it exists)
+        app_dir_local = self.output_dir / app_name
+        try:
+            await result.directory(app_output).export(str(app_dir_local))
+        except dagger.QueryError as e:
+            if "no such file or directory" in str(e):
+                # agent didn't create an app directory (e.g. just answered a question)
+                return None, log_file_local
+            raise
 
-            return app_dir_local, log_file_local
+        return app_dir_local, log_file_local
 
     async def generate_bulk(
         self,
@@ -127,8 +145,12 @@ class DaggerAppGenerator:
         model: str | None = None,
         mcp_args: list[str] | None = None,
         max_concurrency: int = 4,
+        on_complete: Callable[[str, bool], None] | None = None,
     ) -> list[tuple[str, Path | None, Path | None, str | None]]:
         """Generate multiple apps with Dagger parallelism.
+
+        Uses a single Dagger connection for all generations, allowing Dagger
+        to optimize container reuse and parallel execution.
 
         Args:
             prompts: dict mapping app_name to prompt
@@ -136,27 +158,38 @@ class DaggerAppGenerator:
             model: model name (required for litellm)
             mcp_args: optional MCP server args
             max_concurrency: max parallel generations
+            on_complete: callback(app_name, success) called when each app finishes
 
         Returns:
             list of (app_name, app_dir, log_file, error) tuples
         """
-        sem = asyncio.Semaphore(max_concurrency)
+        # suppress dagger output for bulk runs
+        cfg = dagger.Config(log_output=open(os.devnull, "w"))
 
-        async def run_with_sem(
-            app_name: str, prompt: str
-        ) -> tuple[str, Path | None, Path | None, str | None]:
-            async with sem:
-                try:
-                    app_dir, log_file = await self.generate_single(
-                        prompt, app_name, backend, model, mcp_args
-                    )
-                    return (app_name, app_dir, log_file, None)
-                except Exception as e:
-                    log_path = self.output_dir / "logs" / f"{app_name}.log"
-                    return (app_name, None, log_path if log_path.exists() else None, str(e))
+        async with dagger.Connection(cfg) as client:
+            # build container once, reuse for all generations
+            base_container = await self._build_container(client)
+            sem = asyncio.Semaphore(max_concurrency)
 
-        tasks = [run_with_sem(name, prompt) for name, prompt in prompts.items()]
-        return await asyncio.gather(*tasks)
+            async def run_with_sem(
+                app_name: str, prompt: str
+            ) -> tuple[str, Path | None, Path | None, str | None]:
+                async with sem:
+                    try:
+                        app_dir, log_file = await self._run_generation(
+                            client, base_container, prompt, app_name, backend, model, mcp_args
+                        )
+                        if on_complete:
+                            on_complete(app_name, True)
+                        return (app_name, app_dir, log_file, None)
+                    except Exception as e:
+                        if on_complete:
+                            on_complete(app_name, False)
+                        log_path = self.output_dir / "logs" / f"{app_name}.log"
+                        return (app_name, None, log_path if log_path.exists() else None, str(e))
+
+            tasks = [run_with_sem(name, prompt) for name, prompt in prompts.items()]
+            return await asyncio.gather(*tasks)
 
     async def _build_container(self, client: dagger.Client) -> dagger.Container:
         """Build container from Dockerfile with layer caching."""
