@@ -11,7 +11,30 @@ from pathlib import Path
 
 import dagger
 
+from cli.generation.codegen import GenerationMetrics
+
 logger = logging.getLogger(__name__)
+
+
+def _read_metrics_from_trajectory(app_dir: Path) -> GenerationMetrics | None:
+    """Read metrics from trajectory.jsonl in app directory."""
+    traj_file = app_dir / "trajectory.jsonl"
+    if not traj_file.exists():
+        return None
+
+    # trajectory.jsonl has one JSON object per line, first line is the run metadata
+    try:
+        first_line = traj_file.read_text().split("\n")[0]
+        data = json.loads(first_line)
+        return GenerationMetrics(
+            cost_usd=data.get("cost_usd", 0.0),
+            input_tokens=data.get("total_tokens", 0),  # trajectory stores total_tokens
+            output_tokens=0,  # not tracked separately in trajectory
+            turns=data.get("turns", 0),
+        )
+    except (json.JSONDecodeError, IndexError, KeyError) as e:
+        logger.warning(f"Failed to parse trajectory metrics: {e}")
+        return None
 
 
 def _check_binary_format(binary_path: Path) -> None:
@@ -66,11 +89,11 @@ class DaggerAppGenerator:
         backend: str = "claude",
         model: str | None = None,
         mcp_args: list[str] | None = None,
-    ) -> tuple[Path | None, Path]:
+    ) -> tuple[Path | None, Path, GenerationMetrics | None]:
         """Generate single app, export app dir + logs.
 
         Returns:
-            tuple of (app_dir or None, log_file) paths on host.
+            tuple of (app_dir or None, log_file, metrics or None) paths on host.
             app_dir is None if agent didn't create an app.
         """
         if self.stream_logs:
@@ -92,7 +115,7 @@ class DaggerAppGenerator:
         backend: str,
         model: str | None,
         mcp_args: list[str] | None,
-    ) -> tuple[Path | None, Path]:
+    ) -> tuple[Path | None, Path, GenerationMetrics | None]:
         """Run generation in container and export results."""
         # path inside container for generated app
         app_output = f"/workspace/{app_name}"
@@ -133,10 +156,12 @@ class DaggerAppGenerator:
         except dagger.QueryError as e:
             if "no such file or directory" in str(e):
                 # agent didn't create an app directory (e.g. just answered a question)
-                return None, log_file_local
+                return None, log_file_local, None
             raise
 
-        return app_dir_local, log_file_local
+        # read metrics from trajectory file
+        metrics = _read_metrics_from_trajectory(app_dir_local)
+        return app_dir_local, log_file_local, metrics
 
     async def generate_bulk(
         self,
@@ -146,7 +171,7 @@ class DaggerAppGenerator:
         mcp_args: list[str] | None = None,
         max_concurrency: int = 4,
         on_complete: Callable[[str, bool], None] | None = None,
-    ) -> list[tuple[str, Path | None, Path | None, str | None]]:
+    ) -> list[tuple[str, Path | None, Path | None, GenerationMetrics | None, str | None]]:
         """Generate multiple apps with Dagger parallelism.
 
         Uses a single Dagger connection for all generations, allowing Dagger
@@ -161,7 +186,7 @@ class DaggerAppGenerator:
             on_complete: callback(app_name, success) called when each app finishes
 
         Returns:
-            list of (app_name, app_dir, log_file, error) tuples
+            list of (app_name, app_dir, log_file, metrics, error) tuples
         """
         # suppress dagger output for bulk runs
         cfg = dagger.Config(log_output=open(os.devnull, "w"))
@@ -173,20 +198,20 @@ class DaggerAppGenerator:
 
             async def run_with_sem(
                 app_name: str, prompt: str
-            ) -> tuple[str, Path | None, Path | None, str | None]:
+            ) -> tuple[str, Path | None, Path | None, GenerationMetrics | None, str | None]:
                 async with sem:
                     try:
-                        app_dir, log_file = await self._run_generation(
+                        app_dir, log_file, metrics = await self._run_generation(
                             client, base_container, prompt, app_name, backend, model, mcp_args
                         )
                         if on_complete:
                             on_complete(app_name, True)
-                        return (app_name, app_dir, log_file, None)
+                        return (app_name, app_dir, log_file, metrics, None)
                     except Exception as e:
                         if on_complete:
                             on_complete(app_name, False)
                         log_path = self.output_dir / "logs" / f"{app_name}.log"
-                        return (app_name, None, log_path if log_path.exists() else None, str(e))
+                        return (app_name, None, log_path if log_path.exists() else None, None, str(e))
 
             tasks = [run_with_sem(name, prompt) for name, prompt in prompts.items()]
             return await asyncio.gather(*tasks)

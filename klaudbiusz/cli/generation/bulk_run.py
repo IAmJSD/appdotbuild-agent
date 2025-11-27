@@ -27,7 +27,7 @@ def main(
     mcp_binary: str | None = None,
     mcp_args: list[str] | None = None,
     output_dir: str | None = None,
-    max_concurrency: int = 4,
+    max_concurrency: int = 8,
 ) -> None:
     """Bulk app generation via Dagger with parallelism.
 
@@ -119,9 +119,21 @@ def main(
         pbar.close()
         _restore_terminal_cursor()
 
-    # separate successful and failed
-    successful = [(name, app_dir, log) for name, app_dir, log, err in results if err is None]
-    failed = [(name, log, err) for name, app_dir, log, err in results if err is not None]
+    # separate successful and failed (results now include metrics)
+    successful = [(name, app_dir, log, metrics) for name, app_dir, log, metrics, err in results if err is None]
+    failed = [(name, log, err) for name, app_dir, log, metrics, err in results if err is not None]
+
+    # aggregate metrics from successful runs
+    total_cost = 0.0
+    total_tokens = 0
+    total_turns = 0
+    metrics_count = 0
+    for _, _, _, metrics in successful:
+        if metrics:
+            total_cost += metrics.get("cost_usd", 0.0)
+            total_tokens += metrics.get("input_tokens", 0)
+            total_turns += metrics.get("turns", 0)
+            metrics_count += 1
 
     print(f"\n{'=' * 80}")
     print("Bulk Generation Summary")
@@ -129,6 +141,14 @@ def main(
     print(f"Total prompts: {len(selected_prompts)}")
     print(f"Successful: {len(successful)}")
     print(f"Failed: {len(failed)}")
+
+    if metrics_count > 0:
+        print(f"\nMetrics (from {metrics_count} runs):")
+        print(f"  Total cost: ${total_cost:.4f}")
+        print(f"  Avg cost: ${total_cost / metrics_count:.4f}")
+        print(f"  Total tokens: {total_tokens:,}")
+        print(f"  Avg tokens: {total_tokens // metrics_count:,}")
+        print(f"  Avg turns: {total_turns / metrics_count:.1f}")
 
     if failed:
         print(f"\n{'=' * 80}")
@@ -144,10 +164,13 @@ def main(
         print(f"\n{'=' * 80}")
         print("Generated apps:")
         print(f"{'=' * 80}")
-        for name, app_dir, log in successful:
+        for name, app_dir, log, metrics in successful:
             print(f"  - {name}")
             print(f"    Dir: {app_dir}")
-            print(f"    Log: {log}")
+            if metrics:
+                print(
+                    f"    Cost: ${metrics.get('cost_usd', 0):.4f}, Tokens: {metrics.get('input_tokens', 0):,}, Turns: {metrics.get('turns', 0)}"
+                )
 
     print(f"\n{'=' * 80}\n")
 
@@ -166,8 +189,11 @@ def main(
             "error": err,
             "backend": backend,
             "model": model,
+            "cost_usd": metrics.get("cost_usd") if metrics else None,
+            "tokens": metrics.get("input_tokens") if metrics else None,
+            "turns": metrics.get("turns") if metrics else None,
         }
-        for name, app_dir, log, err in results
+        for name, app_dir, log, metrics, err in results
     ]
     output_file.write_text(json.dumps(results_data, indent=2))
     print(f"Results saved to {output_file}")
