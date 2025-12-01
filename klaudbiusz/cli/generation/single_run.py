@@ -76,7 +76,7 @@ def run(
         print("No app generated (agent may have just answered without creating files)")
     print(f"  Log: {log_file}")
     if metrics:
-        print(f"  Cost: ${metrics.cost_usd:.4f} ({metrics.input_tokens} in / {metrics.output_tokens} out)")
+        print(f"  Cost: ${metrics['cost_usd']:.4f} ({metrics['input_tokens']} in / {metrics['output_tokens']} out)")
     print(f"{'=' * 80}\n")
 
     return {"app_dir": str(app_dir) if app_dir else None, "log_file": str(log_file)}
