@@ -289,6 +289,64 @@ class EvaluationTracker:
         except Exception as e:
             print(f"⚠️  Failed to log artifacts from {dir_path}: {e}")
 
+    def log_app_source(self, app_dir: str, app_name: str):
+        """
+        Archive and upload app source code to MLflow.
+
+        Cleans node_modules and other build artifacts before archiving.
+
+        Args:
+            app_dir: Path to app directory
+            app_name: Name of the app for artifact naming
+        """
+        if not self.enabled:
+            return
+
+        try:
+            import shutil
+            import tarfile
+            import tempfile
+
+            app_path = Path(app_dir)
+            if not app_path.exists():
+                return
+
+            # Create temporary archive
+            with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as tmp_file:
+                archive_path = tmp_file.name
+
+            try:
+                # Create tarball excluding build artifacts
+                with tarfile.open(archive_path, "w:gz") as tar:
+                    for item in app_path.iterdir():
+                        # Skip build artifacts and dependency directories
+                        if item.name in {
+                            "node_modules",
+                            ".next",
+                            "dist",
+                            "build",
+                            ".turbo",
+                            "__pycache__",
+                            ".pytest_cache",
+                            ".mypy_cache",
+                            ".venv",
+                            "venv",
+                        }:
+                            continue
+
+                        tar.add(item, arcname=item.name)
+
+                # Upload to MLflow
+                mlflow.log_artifact(archive_path, artifact_path=f"app_sources/{app_name}")
+
+            finally:
+                # Clean up temporary archive
+                if Path(archive_path).exists():
+                    Path(archive_path).unlink()
+
+        except Exception as e:
+            print(f"  ⚠️  Failed to log app source for {app_name}: {e}")
+
     def log_trajectory_trace(self, trajectory_file: str, app_name: str):
         """
         Log trajectory as MLflow Trace for visualization in Traces tab.
