@@ -131,12 +131,19 @@ class DaggerAppGenerator:
         if mcp_args:
             cmd.append(f"--mcp_args={json.dumps(mcp_args)}")
 
-        # mount cache volume for python deps (safe for concurrent access)
-        # note: npm cache is NOT cached to avoid corruption under parallel execution
-        # npm packages are already optimized via BuildKit cache mounts in Dockerfile
+        # mount cache volumes for python and npm deps
+        # npm cache is now safe for concurrent access with proper ownership
         python_cache = client.cache_volume("klaudbiusz-python-cache")
-        container = base_container.with_mounted_cache(
-            "/home/klaudbiusz/.cache", python_cache, owner="klaudbiusz:klaudbiusz"
+        npm_cache = client.cache_volume("klaudbiusz-npm-cache")
+
+        container = (
+            base_container
+            .with_mounted_cache(
+                "/home/klaudbiusz/.cache", python_cache, owner="klaudbiusz:klaudbiusz"
+            )
+            .with_mounted_cache(
+                "/home/klaudbiusz/.npm", npm_cache, owner="klaudbiusz:klaudbiusz"
+            )
         )
 
         # run generation
