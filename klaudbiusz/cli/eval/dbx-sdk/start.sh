@@ -28,9 +28,33 @@ if [ ${#MISSING_TOOLS[@]} -gt 0 ]; then
 fi
 # ===== END PREREQUISITE CHECKS =====
 
-# Load .env file if it exists (optional - env vars passed from Python)
+# Update .env file with container env vars (so Node's --env-file-if-exists uses correct values)
+# This is needed because Node's --env-file-if-exists loads .env AFTER process.env
 if [ -f ".env" ]; then
-    export $(cat .env | grep -v '^#' | grep -v '^$' | xargs)
+    # Create temp file with container env vars taking precedence
+    cp .env .env.bak
+    
+    # Update DATABRICKS_APP_PORT if set in container env
+    if [ -n "$DATABRICKS_APP_PORT" ]; then
+        if grep -q "^DATABRICKS_APP_PORT=" .env; then
+            sed -i "s/^DATABRICKS_APP_PORT=.*/DATABRICKS_APP_PORT=$DATABRICKS_APP_PORT/" .env
+        else
+            echo "DATABRICKS_APP_PORT=$DATABRICKS_APP_PORT" >> .env
+        fi
+    fi
+    
+    # Update other critical vars similarly
+    # Note: Using @ as sed delimiter to handle URLs with // properly
+    for var in DATABRICKS_HOST DATABRICKS_TOKEN DATABRICKS_WAREHOUSE_ID DATABRICKS_APP_NAME; do
+        val="${!var}"
+        if [ -n "$val" ]; then
+            if grep -q "^${var}=" .env; then
+                # Remove the line and append new value (safer than sed substitution with special chars)
+                grep -v "^${var}=" .env > .env.tmp && mv .env.tmp .env
+            fi
+            echo "${var}=$val" >> .env
+        fi
+    done
 fi
 
 # Check required env vars
@@ -48,39 +72,60 @@ if [ ! -f "package.json" ]; then
     exit 1
 fi
 
-# Start the app in background (redirect output to prevent Python subprocess hang)
-npm start >/dev/null 2>&1 &
+# Start the app in background (capture stdout/stderr for debugging)
+npm start > /tmp/app_stdout.log 2> /tmp/app_stderr.log &
 APP_PID=$!
 
-# Wait for app to start (5 seconds for npm apps)
-sleep 5
+# Give npm a moment to spawn the node process
+sleep 1
 
-# Check if process is still running
-if ! kill -0 $APP_PID 2>/dev/null; then
-    echo "❌ Error: Process died during startup" >&2
-    exit 1
-fi
+# Poll until app responds or timeout (max 10 seconds, check every 0.5s)
+MAX_WAIT=20  # 20 iterations * 0.5s = 10 seconds max
+for i in $(seq 1 $MAX_WAIT); do
+    # Check if process died
+    if ! kill -0 $APP_PID 2>/dev/null; then
+        echo "❌ Error: Process died during startup" >&2
+        if [ -s /tmp/app_stderr.log ]; then
+            echo "--- App stderr ---" >&2
+            cat /tmp/app_stderr.log >&2
+        fi
+        if [ -s /tmp/app_stdout.log ]; then
+            echo "--- App stdout (last 50 lines) ---" >&2
+            tail -50 /tmp/app_stdout.log >&2
+        fi
+        echo "--- End of logs ---" >&2
+        exit 1
+    fi
 
-# Health check with retries (3 attempts, 2s timeout each, 1s apart)
-for i in {1..3}; do
-    # Try healthcheck endpoint first
-    if curl -f -s --max-time 2 http://localhost:${DATABRICKS_APP_PORT}/healthcheck >/dev/null 2>&1; then
-        echo "✅ App ready (healthcheck)" >&2
+    # Try healthcheck endpoint (accept any HTTP response)
+    # Use || true to prevent set -e from exiting on curl failure
+    RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 1 http://localhost:${DATABRICKS_APP_PORT}/healthcheck 2>/dev/null || true)
+    if [ "$RESPONSE" != "000" ] && [ -n "$RESPONSE" ]; then
+        echo "✅ App ready (HTTP $RESPONSE)" >&2
         exit 0
     fi
 
-    # Fallback to root endpoint for npm apps
-    if curl -f -s --max-time 2 http://localhost:${DATABRICKS_APP_PORT}/ >/dev/null 2>&1; then
-        echo "✅ App ready (root)" >&2
+    # Fallback to root endpoint
+    RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 1 http://localhost:${DATABRICKS_APP_PORT}/ 2>/dev/null || true)
+    if [ "$RESPONSE" != "000" ] && [ -n "$RESPONSE" ]; then
+        echo "✅ App ready (HTTP $RESPONSE)" >&2
         exit 0
     fi
 
-    # Wait before retry (except on last attempt)
-    if [ $i -lt 3 ]; then
-        sleep 1
-    fi
+    # Wait before next check
+    sleep 0.5
 done
 
-# Failed to connect
-echo "❌ Error: App failed health check" >&2
+# Timeout - show debug info
+echo "❌ Error: App failed to start within 11 seconds on port ${DATABRICKS_APP_PORT}" >&2
+if kill -0 $APP_PID 2>/dev/null; then
+    echo "Process $APP_PID is still running but not responding" >&2
+else
+    echo "Process $APP_PID has died" >&2
+fi
+echo "--- App stderr ---" >&2
+cat /tmp/app_stderr.log 2>/dev/null >&2 || echo "(no stderr)" >&2
+echo "--- App stdout (last 20 lines) ---" >&2
+tail -20 /tmp/app_stdout.log 2>/dev/null >&2 || echo "(no stdout)" >&2
+echo "--- End of debug ---" >&2
 exit 1

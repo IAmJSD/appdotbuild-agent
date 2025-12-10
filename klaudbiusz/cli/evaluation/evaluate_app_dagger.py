@@ -66,6 +66,7 @@ async def evaluate_app_async(
     app_dir: Path,
     prompt: str | None = None,
     port: int = 8000,
+    fast_mode: bool = False,
 ) -> EvalResult:
     """Run full evaluation on an app using Dagger.
 
@@ -74,6 +75,7 @@ async def evaluate_app_async(
         app_dir: Path to the app directory
         prompt: Optional prompt used to generate the app
         port: Port to use for the app (unique per parallel execution)
+        fast_mode: Skip slow LLM/VLM checks (DB connectivity, data validity, UI renders)
     """
     print(f"\nEvaluating: {app_dir.name}")
     print("=" * 60)
@@ -154,10 +156,10 @@ async def evaluate_app_async(
             if not runtime_success:
                 issues.append("Runtime check failed")
                 print(f"    ⚠️  Runtime failed (exit {runtime_result.exit_code})")
-                if runtime_result.stdout:
-                    print(f"       stdout: {runtime_result.stdout[:300]}")
                 if runtime_result.stderr:
-                    print(f"       stderr: {runtime_result.stderr[:300]}")
+                    print(f"       stderr: {runtime_result.stderr[:1000]}")
+                if runtime_result.stdout:
+                    print(f"       stdout: {runtime_result.stdout[:1000]}")
             else:
                 print(f"    ✅ Runtime successful (startup: {startup_time:.1f}s)")
         except Exception as e:
@@ -229,9 +231,13 @@ async def evaluate_app_async(
             print("  [4/7] Skipping tests (dependencies failed)")
 
         # Remaining checks run on host (not in Dagger)
+        # These are slow (LLM/VLM calls) and can be skipped with --fast flag
 
         # Metric 5: Databricks connectivity (only if runtime succeeded)
-        if runtime_success:
+        if fast_mode:
+            print("  [5-7/7] Skipping DB/data/UI checks (--fast mode)")
+        elif runtime_success:
+            print("  [5/7] Checking Databricks connectivity...")
             db_success = check_databricks_connectivity(app_dir, template, port)
             metrics.databricks_connectivity = db_success
             if not db_success:
@@ -245,6 +251,7 @@ async def evaluate_app_async(
                     issues.append(f"Data validity concerns: {data_details}")
 
             # Metric 7: UI functional (VLM)
+            print("  [7/7] Checking UI renders (VLM)...")
             ui_renders, ui_details = check_ui_functional_vlm(app_dir, prompt)
             metrics.ui_renders = ui_renders
             if not ui_renders:
